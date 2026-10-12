@@ -43,3 +43,8 @@ docs/evidence/tmp/
 # OS
 Thumbs.db
 Desktop.ini
+
+# Testing & Coverage
+.coverage
+.pytest_cache/
+htmlcov/
