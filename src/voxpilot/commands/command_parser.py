@@ -19,14 +19,14 @@ class CommandParser:
     def _init_builtins(self) -> None:
         self.builtins: List[Dict[str, Any]] = [
             {"intent": "SHOW_NUMBERS", "patterns": [r"^(?:please\s+)?show\s+numbers(?:\s+everywhere)?$", r"^numbers\s+on$"]},
-            {"intent": "HIDE_NUMBERS", "patterns": [r"^(?:please\s+)?hide\s+numbers$", r"^numbers\s+off$"]},
+            {"intent": "HIDE_NUMBERS", "patterns": [r"^(?:please\s+)?(?:hide|remove)\s+(?:the\s+)?numbers$", r"^numbers\s+off$"]},
             {"intent": "SHOW_NAMES", "patterns": [r"^(?:please\s+)?show\s+names$", r"^names\s+on$"]},
             {"intent": "HIDE_NAMES", "patterns": [r"^(?:please\s+)?hide\s+names$", r"^names\s+off$"]},
-            {"intent": "SHOW_GRID", "patterns": [r"^(?:please\s+)?show\s+grid$", r"^grid\s+on$"]},
+            {"intent": "SHOW_GRID", "patterns": [r"^(?:show|show me)?\s*(?:the\s+)?(?:screen\s+)?grid$", r"^grid\s+on$"]},
             {"intent": "HIDE_GRID", "patterns": [r"^(?:please\s+)?hide\s+grid$", r"^grid\s+off$", r"^cancel\s+grid$"]},
             {"intent": "SHOW_COMMANDS", "patterns": [r"^show\s+commands$", r"^what\s+can\s+i\s+say$"]},
-            {"intent": "WAKE_UP", "patterns": [r"^voxpilot\s+wake\s+up$", r"^wake\s+up$", r"^start\s+listening$"]},
-            {"intent": "GO_TO_SLEEP", "patterns": [r"^go\s+to\s+sleep$", r"^stop\s+listening$", r"^sleep$"]},
+            {"intent": "WAKE_UP", "patterns": [r"^(?:voxpilot\s+)?wake\s+up(?:\s+voxpilot)?$", r"^start\s+listening$"]},
+            {"intent": "GO_TO_SLEEP", "patterns": [r"^(?:put\s+voxpilot\s+to\s+sleep|go\s+to\s+sleep|stop\s+listening|sleep)$"]},
             {"intent": "MUTE", "patterns": [r"^mute(?:\s+microphone)?$"]},
             {"intent": "UNMUTE", "patterns": [r"^unmute(?:\s+microphone)?$"]},
             {"intent": "START_DICTATION", "patterns": [r"^start\s+dictation$", r"^dictate$", r"^dictation\s+mode$"]},
@@ -35,6 +35,7 @@ class CommandParser:
             {"intent": "PRESS_ESCAPE", "patterns": [r"^press\s+escape$", r"^escape$", r"^cancel$"]},
             {"intent": "PRESS_TAB", "patterns": [r"^press\s+tab$", r"^tab$"]},
             {"intent": "PRESS_BACKSPACE", "patterns": [r"^backspace$", r"^delete\s+character$"]},
+            {"intent": "DELETE_LAST_WORD", "patterns": [r"^delete\s+last\s+word$"]},
             {"intent": "COPY", "patterns": [r"^copy(?:\s+that)?$"]},
             {"intent": "CUT", "patterns": [r"^cut(?:\s+that)?$"]},
             {"intent": "PASTE", "patterns": [r"^paste(?:\s+that)?$"]},
@@ -46,10 +47,10 @@ class CommandParser:
             {"intent": "MAXIMIZE_WINDOW", "patterns": [r"^maximize\s+window$", r"^maximize$"]},
             {"intent": "RESTORE_WINDOW", "patterns": [r"^restore\s+window$"]},
             {"intent": "SHOW_DESKTOP", "patterns": [r"^show\s+desktop$"]},
-            {"intent": "SNAP_WINDOW_LEFT", "patterns": [r"^(?:snap|snap window)\s+left$"]},
-            {"intent": "SNAP_WINDOW_RIGHT", "patterns": [r"^(?:snap|snap window)\s+right$"]},
-            {"intent": "SNAP_WINDOW_UP", "patterns": [r"^(?:snap|snap window)\s+(?:up|top)$"]},
-            {"intent": "SNAP_WINDOW_DOWN", "patterns": [r"^(?:snap|snap window)\s+(?:down|bottom)$"]},
+            {"intent": "SNAP_WINDOW_LEFT", "patterns": [r"^(?:snap|snap window|snap this)(?:\s+to)?(?:\s+the)?\s+left$"]},
+            {"intent": "SNAP_WINDOW_RIGHT", "patterns": [r"^(?:snap|snap window|snap this)(?:\s+to)?(?:\s+the)?\s+right$"]},
+            {"intent": "SNAP_WINDOW_UP", "patterns": [r"^(?:snap|snap window|snap this)(?:\s+to)?(?:\s+the)?\s+(?:up|top)$"]},
+            {"intent": "SNAP_WINDOW_DOWN", "patterns": [r"^(?:snap|snap window|snap this)(?:\s+to)?(?:\s+the)?\s+(?:down|bottom)$"]},
             {"intent": "SWITCH_APP", "patterns": [r"^(?:switch app|switch window|alt tab)$", r"^switch to next app$"]},
             {"intent": "TASK_VIEW", "patterns": [r"^task view$"]},
             {"intent": "NEXT_DESKTOP", "patterns": [r"^next desktop$"]},
@@ -65,6 +66,11 @@ class CommandParser:
     def parse(self, text: str, context: Optional[FocusState] = None) -> Optional[Intent]:
         cleaned = text.strip().lower()
         cleaned = re.sub(r"[.,?!]", "", cleaned)
+        # Strip common speech fillers and polite prefixes/suffixes
+        cleaned = re.sub(r"^(?:uh+|um+|please|can you|could you|would you)\s+", "", cleaned)
+        cleaned = re.sub(r"^(?:hey\s+voxpilot|voxpilot)\s+", "", cleaned)
+        cleaned = re.sub(r"\s+(?:please|for me|now)$", "", cleaned)
+        cleaned = cleaned.strip()
         if not cleaned:
             return None
 
@@ -92,7 +98,7 @@ class CommandParser:
             if len(chord_tokens) >= 2:
                 return Intent(name="KEY_COMBINATION", confidence=0.95, slots={"keys": chord_tokens}, raw_text=text)
 
-        m_click_num = re.match(r"^(?:please\s+)?(?:click|press|hit)\s+(.+)$", cleaned)
+        m_click_num = re.match(r"^(?:please\s+)?(?:click|press|hit)(?:\s+on)?(?:\s+number)?\s+(.+)$", cleaned)
         if m_click_num:
             target_phrase = m_click_num.group(1).strip()
             num = self.normalize_number(target_phrase)
@@ -143,8 +149,8 @@ class CommandParser:
                 raw_text=text,
             )
 
-        # Check grid drill down e.g. "drill down 5", "zoom in 5"
-        m_drill = re.match(r"^(?:drill down|zoom in|subdivide)\s+(.+)$", cleaned)
+        # Check grid drill down e.g. "drill down 5", "zoom in 5", "zoom into 5"
+        m_drill = re.match(r"^(?:drill down|zoom in|zoom into|drill into|subdivide)\s+(.+)$", cleaned)
         if m_drill:
             target_str = m_drill.group(1).strip()
             num = self.normalize_number(target_str)

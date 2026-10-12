@@ -1,11 +1,12 @@
 # VoxPilot Project Status
 
 ## Overall Status
-- Current Phase: Phase 4 (Hardening, Performance & Packaging)
+- Current Phase: Phase 5 (Packaging, Documentation & Release)
 - Gate 0 Status: APPROVED / SIGNED OFF
 - Gate 1 Status: APPROVED / SIGNED OFF
 - Gate 2 Status: APPROVED / SIGNED OFF
 - Gate 3 Status: APPROVED / SIGNED OFF
+- Gate 4 Status: APPROVED / SIGNED OFF
 - Active Goal: Hands-free voice control and dictation system for Windows
 
 ## Milestone Gates
@@ -13,7 +14,7 @@
 - [x] Gate 1: Spikes & Contracts (DECISIONS.md, contracts merged, throwaway spikes verified)
 - [x] Gate 2: Core Vertical Slice (E2E FakeMic audio -> STT -> NLU -> show numbers -> overlay -> click)
 - [x] Gate 3: Breadth (Grid, names/disambiguation, dictation, editing, windows/apps/keyboard, custom commands, extension, OCR, HUD, settings)
-- [ ] Gate 4: Hardening & Performance (Soak, fault injection, budgets, accuracy benchmarks, security review)
+- [x] Gate 4: Hardening & Performance (Soak, fault injection, budgets, accuracy benchmarks, security review)
 - [ ] Gate 5: Packaging & Docs (Installer verified, user guide, final report)
 
 ## Subagent Status Table

@@ -42,14 +42,14 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "E2E Integration tests PASSED." -ForegroundColor Green
 
-# 5. Run Adversarial Attack Suites (Rounds 1 & 2)
-Write-Host "[5/6] Running Adversarial Attack Suites (Rounds 1 & 2)..." -ForegroundColor Yellow
-python -m pytest tests/test_adversarial_slice.py tests/test_adversarial_round2.py -q
+# 5. Run Adversarial Attack & Fault Injection Suites (Rounds 1, 2 & 3)
+Write-Host "[5/6] Running Adversarial Attack & Fault Injection Suites (Rounds 1, 2 & 3)..." -ForegroundColor Yellow
+python -m pytest tests/test_adversarial_slice.py tests/test_adversarial_round2.py tests/test_adversarial_round3.py tests/test_fault_injection.py -q
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Adversarial tests failed!"
+    Write-Error "Adversarial or Fault Injection tests failed!"
     exit 1
 }
-Write-Host "Adversarial attack suites PASSED (30 attack vectors verified)." -ForegroundColor Green
+Write-Host "Adversarial & Fault Injection suites PASSED (43 attack & resilience vectors verified)." -ForegroundColor Green
 
 # 6. Run CLI Doctor Self-Check
 Write-Host "[6/6] Running VoxPilot Doctor Self-Diagnostics..." -ForegroundColor Yellow

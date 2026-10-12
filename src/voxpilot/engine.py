@@ -49,6 +49,7 @@ class VoxPilotEngine:
         self.is_running = False
         self._last_result: Optional[CommandResult] = None
         self._history: List[CommandResult] = []
+        self._lock = threading.RLock()
 
         self.speech_engine.subscribe(self._on_transcript)
 
@@ -65,17 +66,18 @@ class VoxPilotEngine:
 
     def process_text_command(self, phrase: str) -> CommandResult:
         """Direct injection of phrase (e.g. for testing, fake-mic, or CLI 'voxpilot say')."""
-        t0 = time.perf_counter()
-        intent = self.command_parser.parse(phrase)
-        if not intent:
-            res = CommandResult.no_match(raw_text=phrase, execution_time_ms=(time.perf_counter() - t0) * 1000)
+        with self._lock:
+            t0 = time.perf_counter()
+            intent = self.command_parser.parse(phrase)
+            if not intent:
+                res = CommandResult.no_match(raw_text=phrase, execution_time_ms=(time.perf_counter() - t0) * 1000)
+                self._record_result(res)
+                return res
+
+            res = self.dispatch_intent(intent)
+            res.execution_time_ms = (time.perf_counter() - t0) * 1000
             self._record_result(res)
             return res
-
-        res = self.dispatch_intent(intent)
-        res.execution_time_ms = (time.perf_counter() - t0) * 1000
-        self._record_result(res)
-        return res
 
     def _on_transcript(self, event: TranscriptEvent) -> None:
         if not event.is_final:
@@ -321,15 +323,16 @@ class VoxPilotEngine:
             )
 
         # Verify target window is still alive
-        if element.window_handle and not user32.IsWindow(element.window_handle):
-            self.element_provider.invalidate_cache()
-            return CommandResult(
-                status=CommandStatus.ELEMENT_GONE,
-                code="ERR_WINDOW_GONE",
-                message=f"Target window {element.window_handle} was closed or destroyed",
-                matched_intent=intent,
-                details={"element_id": num},
-            )
+        if isinstance(element.window_handle, int) and element.window_handle > 0 and user32 is not None:
+            if not user32.IsWindow(element.window_handle):
+                self.element_provider.invalidate_cache()
+                return CommandResult(
+                    status=CommandStatus.ELEMENT_GONE,
+                    code="ERR_WINDOW_GONE",
+                    message=f"Target window {element.window_handle} was closed or destroyed",
+                    matched_intent=intent,
+                    details={"element_id": num},
+                )
 
         cx, cy = element.rect.center()
         self.input_injector.click_at(cx, cy, button=button, count=count)
