@@ -1,0 +1,1 @@
+2026-10-12 23:40:01.204 spike_uia_target.py[26] spike_target -> Find Control Timeout(10s): {SubName: 'Notepad', ControlType: WindowControl}

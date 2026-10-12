@@ -17,7 +17,7 @@
 | Subagent | Status | Current Task | Blockers |
 |---|---|---|---|
 | Recon | Completed | Environment discovery & Voice Access benchmark done | None |
-| Architect | Ready | Ready for Phase 1 architecture & contracts | None |
+| Architect | Completed | Phase 1 architecture & contracts delivered | None |
 | Speech-Engine | Standby | Queued for Phase 1 spike | None |
 | Command-NLU | Standby | Queued for Phase 1 spike | None |
 | UIA-Engineer | Standby | Queued for Phase 1 spike | None |
