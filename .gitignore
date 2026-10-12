@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# .NET / C#
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Models and large binaries
+models/
+*.onnx
+*.bin
+*.tar.gz
+*.zip
+*.msi
+*.exe
+
+# Except tooling/scripts if needed
+!*.ps1
+!*.cmd
+!*.bat
+
+# Logs and temp files
+*.log
+logs/
+temp/
+docs/evidence/tmp/
+
+# OS
+Thumbs.db
+Desktop.ini
