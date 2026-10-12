@@ -17,12 +17,12 @@ Write-Host "Python Version: $pyVersion" -ForegroundColor Green
 
 # 2. Run Contracts, Unit & Command NLU tests
 Write-Host "[2/6] Running Contracts, Commands, Extensions & Shell App tests..." -ForegroundColor Yellow
-python -m pytest tests/test_contracts.py tests/test_commands.py tests/test_extended_commands.py tests/test_browser_extension.py tests/test_shell_app.py -q
+python -m pytest tests/test_contracts.py tests/test_commands.py tests/test_extended_commands.py tests/test_browser_extension.py tests/test_shell_app.py tests/test_offline_telemetry.py -q
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Contracts or Command NLU tests failed!"
     exit 1
 }
-Write-Host "Contracts, Commands, Extensions & Shell App tests PASSED." -ForegroundColor Green
+Write-Host "Contracts, Commands, Extensions, Shell App & Offline Telemetry tests PASSED." -ForegroundColor Green
 
 # 3. Run Dictation & Normalization Suite (>=300 tests)
 Write-Host "[3/6] Running Dictation & Normalization Suite..." -ForegroundColor Yellow
