@@ -1,0 +1,10 @@
+{
+  "name": "com.voxpilot.host",
+  "description": "VoxPilot Chrome/Edge Native Messaging Host",
+  "path": "host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://voxpilotaccessibilitybridge/",
+    "chrome-extension://*/"
+  ]
+}

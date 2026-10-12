@@ -138,8 +138,114 @@ class VoxPilotEngine:
             self.overlay_service.hide_all()
             self.overlay_service.update_hud(mode=self.mode, text="Sleeping")
             return CommandResult.success(intent=intent, message="VoxPilot sleeping")
+        elif name == "START_DICTATION":
+            self.mode = EngineMode.DICTATION
+            self.overlay_service.update_hud(mode=self.mode, text="Dictation Active")
+            return CommandResult.success(intent=intent, message="Switched to Dictation mode")
+        elif name == "STOP_DICTATION":
+            self.mode = EngineMode.COMMAND
+            self.overlay_service.update_hud(mode=self.mode, text="Command Mode Active")
+            return CommandResult.success(intent=intent, message="Switched to Command mode")
+        elif name == "SNAP_WINDOW_LEFT":
+            self.input_injector.key_combination(["win", "left"])
+            return CommandResult.success(intent=intent, message="Snapped left")
+        elif name == "SNAP_WINDOW_RIGHT":
+            self.input_injector.key_combination(["win", "right"])
+            return CommandResult.success(intent=intent, message="Snapped right")
+        elif name == "SNAP_WINDOW_UP":
+            self.input_injector.key_combination(["win", "up"])
+            return CommandResult.success(intent=intent, message="Snapped up")
+        elif name == "SNAP_WINDOW_DOWN":
+            self.input_injector.key_combination(["win", "down"])
+            return CommandResult.success(intent=intent, message="Snapped down")
+        elif name == "SWITCH_APP":
+            self.input_injector.key_combination(["alt", "tab"])
+            return CommandResult.success(intent=intent, message="Switched application")
+        elif name == "TASK_VIEW":
+            self.input_injector.key_combination(["win", "tab"])
+            return CommandResult.success(intent=intent, message="Task view opened")
+        elif name == "NEXT_DESKTOP":
+            self.input_injector.key_combination(["ctrl", "win", "right"])
+            return CommandResult.success(intent=intent, message="Switched to next desktop")
+        elif name == "PREVIOUS_DESKTOP":
+            self.input_injector.key_combination(["ctrl", "win", "left"])
+            return CommandResult.success(intent=intent, message="Switched to previous desktop")
+        elif name == "PAGE_UP":
+            self.input_injector.key_press("pageup")
+            return CommandResult.success(intent=intent, message="Page up")
+        elif name == "PAGE_DOWN":
+            self.input_injector.key_press("pagedown")
+            return CommandResult.success(intent=intent, message="Page down")
+        elif name == "CLOSE_WINDOW":
+            self.input_injector.key_combination(["alt", "f4"])
+            return CommandResult.success(intent=intent, message="Closed window")
+        elif name == "MINIMIZE_WINDOW":
+            self.input_injector.key_combination(["win", "down"])
+            return CommandResult.success(intent=intent, message="Minimized window")
+        elif name == "MAXIMIZE_WINDOW":
+            self.input_injector.key_combination(["win", "up"])
+            return CommandResult.success(intent=intent, message="Maximized window")
+        elif name == "RESTORE_WINDOW":
+            self.input_injector.key_combination(["win", "down"])
+            return CommandResult.success(intent=intent, message="Restored window")
+        elif name == "SHOW_DESKTOP":
+            self.input_injector.key_combination(["win", "d"])
+            return CommandResult.success(intent=intent, message="Showed desktop")
+        elif name == "PRESS_ENTER":
+            self.input_injector.key_press("enter")
+            return CommandResult.success(intent=intent, message="Pressed enter")
+        elif name == "PRESS_ESCAPE":
+            self.input_injector.key_press("escape")
+            return CommandResult.success(intent=intent, message="Pressed escape")
+        elif name == "PRESS_TAB":
+            self.input_injector.key_press("tab")
+            return CommandResult.success(intent=intent, message="Pressed tab")
+        elif name == "PRESS_BACKSPACE":
+            self.input_injector.key_press("backspace")
+            return CommandResult.success(intent=intent, message="Pressed backspace")
+        elif name == "COPY":
+            self.input_injector.key_combination(["ctrl", "c"])
+            return CommandResult.success(intent=intent, message="Copied")
+        elif name == "CUT":
+            self.input_injector.key_combination(["ctrl", "x"])
+            return CommandResult.success(intent=intent, message="Cut")
+        elif name == "PASTE":
+            self.input_injector.key_combination(["ctrl", "v"])
+            return CommandResult.success(intent=intent, message="Pasted")
+        elif name == "SELECT_ALL":
+            self.input_injector.key_combination(["ctrl", "a"])
+            return CommandResult.success(intent=intent, message="Selected all")
+        elif name == "UNDO":
+            self.input_injector.key_combination(["ctrl", "z"])
+            return CommandResult.success(intent=intent, message="Undid")
+        elif name == "REDO":
+            self.input_injector.key_combination(["ctrl", "y"])
+            return CommandResult.success(intent=intent, message="Redid")
+        elif name == "KEY_COMBINATION":
+            keys = intent.slots.get("keys", [])
+            if keys:
+                self.input_injector.key_combination(keys)
+                return CommandResult.success(intent=intent, message=f"Pressed chord: {'+'.join(keys)}")
+            return CommandResult.no_match(raw_text=intent.raw_text, message="Empty chord keys")
+        elif name == "KEY_REPEAT":
+            k = intent.slots.get("key", "")
+            cnt = min(int(intent.slots.get("count", 1)), 50)
+            for _ in range(cnt):
+                self.input_injector.key_press(k)
+            return CommandResult.success(intent=intent, message=f"Pressed {k} {cnt} times")
+        elif name == "DRILL_DOWN_GRID":
+            cell = int(intent.slots.get("cell", 1))
+            self.overlay_service.drill_down_grid(cell)
+            return CommandResult.success(intent=intent, message=f"Drilled down into cell {cell}")
+        elif name == "UNDO_GRID":
+            self.overlay_service.undo_grid()
+            return CommandResult.success(intent=intent, message="Stepped back in grid")
 
         return CommandResult.no_match(raw_text=intent.raw_text, message=f"Unhandled intent: {name}")
+
+    def execute_intent(self, intent: Intent) -> CommandResult:
+        """Alias for dispatch_intent."""
+        return self.dispatch_intent(intent)
 
     def _handle_show_numbers(self, intent: Intent) -> CommandResult:
         elements = self.element_provider.discover_elements()
@@ -148,12 +254,15 @@ class VoxPilotEngine:
 
         # Dynamic grammar loop: Push visible numbers (words + digits) & names to speech engine
         grammar_phrases = ["show numbers", "hide numbers", "show grid", "hide grid"]
-        for el in elements:
-            words = NumberParser.number_to_words(el.element_id)
-            grammar_phrases.append(str(el.element_id))
+        max_num = max(25, len(elements))
+        for num_i in range(1, max_num + 1):
+            words = NumberParser.number_to_words(num_i)
+            grammar_phrases.append(str(num_i))
             grammar_phrases.append(words)
-            grammar_phrases.append(f"click {el.element_id}")
+            grammar_phrases.append(f"click {num_i}")
             grammar_phrases.append(f"click {words}")
+
+        for el in elements:
             if el.name:
                 clean_name = el.name.lower().strip()
                 if clean_name:
@@ -188,6 +297,18 @@ class VoxPilotEngine:
                 message=f"Invalid element number {num}",
                 matched_intent=intent,
             )
+
+        # Check if screen grid is active and number is 1-9
+        if self.overlay_service.is_grid_visible() and 1 <= num <= 9:
+            coords = self.overlay_service.get_grid_cell_center(num)
+            if coords:
+                self.input_injector.click_at(coords[0], coords[1], button, count)
+                self.overlay_service.hide_grid()
+                return CommandResult.success(
+                    intent=intent,
+                    message=f"Clicked grid cell {num}",
+                    details={"x": coords[0], "y": coords[1]},
+                )
 
         element = self.element_provider.get_element_by_id(num)
         if not element:

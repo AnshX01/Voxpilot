@@ -46,6 +46,17 @@ class CommandParser:
             {"intent": "MAXIMIZE_WINDOW", "patterns": [r"^maximize\s+window$", r"^maximize$"]},
             {"intent": "RESTORE_WINDOW", "patterns": [r"^restore\s+window$"]},
             {"intent": "SHOW_DESKTOP", "patterns": [r"^show\s+desktop$"]},
+            {"intent": "SNAP_WINDOW_LEFT", "patterns": [r"^(?:snap|snap window)\s+left$"]},
+            {"intent": "SNAP_WINDOW_RIGHT", "patterns": [r"^(?:snap|snap window)\s+right$"]},
+            {"intent": "SNAP_WINDOW_UP", "patterns": [r"^(?:snap|snap window)\s+(?:up|top)$"]},
+            {"intent": "SNAP_WINDOW_DOWN", "patterns": [r"^(?:snap|snap window)\s+(?:down|bottom)$"]},
+            {"intent": "SWITCH_APP", "patterns": [r"^(?:switch app|switch window|alt tab)$", r"^switch to next app$"]},
+            {"intent": "TASK_VIEW", "patterns": [r"^task view$"]},
+            {"intent": "NEXT_DESKTOP", "patterns": [r"^next desktop$"]},
+            {"intent": "PREVIOUS_DESKTOP", "patterns": [r"^(?:previous|prior) desktop$"]},
+            {"intent": "PAGE_UP", "patterns": [r"^page up$"]},
+            {"intent": "PAGE_DOWN", "patterns": [r"^page down$"]},
+            {"intent": "UNDO_GRID", "patterns": [r"^(?:zoom out|undo grid|back)$"]},
         ]
 
     def normalize_number(self, phrase: str) -> Optional[int]:
@@ -65,6 +76,21 @@ class CommandParser:
                 slots={"number": num},
                 raw_text=text,
             )
+
+        # Check key repeat e.g. "press down 5 times", "press tab 3 times"
+        m_repeat = re.match(r"^(?:press|hit)\s+([a-z0-9]+)\s+([a-z0-9]+)\s+times?$", cleaned)
+        if m_repeat:
+            k_name = m_repeat.group(1).strip()
+            c_phrase = m_repeat.group(2).strip()
+            count = self.normalize_number(c_phrase) or 1
+            return Intent(name="KEY_REPEAT", confidence=0.95, slots={"key": k_name, "count": count}, raw_text=text)
+
+        # Check keyboard chord e.g. "press ctrl shift t", "press alt f4", "press ctrl w"
+        m_chord = re.match(r"^(?:press|hit)\s+((?:(?:ctrl|control|shift|alt|win|windows)\s+)+[a-z0-9f]+)$", cleaned)
+        if m_chord:
+            chord_tokens = m_chord.group(1).split()
+            if len(chord_tokens) >= 2:
+                return Intent(name="KEY_COMBINATION", confidence=0.95, slots={"keys": chord_tokens}, raw_text=text)
 
         m_click_num = re.match(r"^(?:please\s+)?(?:click|press|hit)\s+(.+)$", cleaned)
         if m_click_num:
@@ -116,6 +142,29 @@ class CommandParser:
                 slots={"direction": direction, "amount": amount},
                 raw_text=text,
             )
+
+        # Check grid drill down e.g. "drill down 5", "zoom in 5"
+        m_drill = re.match(r"^(?:drill down|zoom in|subdivide)\s+(.+)$", cleaned)
+        if m_drill:
+            target_str = m_drill.group(1).strip()
+            num = self.normalize_number(target_str)
+            if num is not None and 1 <= num <= 9:
+                return Intent(name="DRILL_DOWN_GRID", confidence=0.98, slots={"cell": num}, raw_text=text)
+
+        # Check key repeat e.g. "press down 5 times", "press tab 3 times"
+        m_repeat = re.match(r"^(?:press|hit)\s+([a-z0-9]+)\s+([a-z0-9]+)\s+times?$", cleaned)
+        if m_repeat:
+            k_name = m_repeat.group(1).strip()
+            c_phrase = m_repeat.group(2).strip()
+            count = self.normalize_number(c_phrase) or 1
+            return Intent(name="KEY_REPEAT", confidence=0.95, slots={"key": k_name, "count": count}, raw_text=text)
+
+        # Check keyboard chord e.g. "press ctrl shift t", "press alt f4", "press ctrl w"
+        m_chord = re.match(r"^press\s+((?:[a-z0-9]+\s+)+[a-z0-9]+)$", cleaned)
+        if m_chord:
+            chord_tokens = m_chord.group(1).split()
+            if len(chord_tokens) >= 2:
+                return Intent(name="KEY_COMBINATION", confidence=0.95, slots={"keys": chord_tokens}, raw_text=text)
 
         # Check custom registered commands
         for cmd in self.custom_commands:

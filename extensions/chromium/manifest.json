@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "VoxPilot Voice Accessibility Bridge",
+  "version": "1.0.0",
+  "description": "High-fidelity DOM accessibility element discovery for VoxPilot voice control",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

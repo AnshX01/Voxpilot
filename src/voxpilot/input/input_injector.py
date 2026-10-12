@@ -293,6 +293,25 @@ class WindowsInputInjector:
                 except Exception:
                     pass
 
+    def key_press(self, key: str) -> bool:
+        """Synthesize discrete key tap."""
+        self.send_key(key)
+        return True
+
+    def key_combination(self, keys: List[str]) -> bool:
+        """Synthesize compound shortcut (e.g. ['ctrl', 'shift', 'p'])."""
+        if not keys:
+            return False
+        mods = keys[:-1]
+        target = keys[-1]
+        self.send_key(target, modifiers=mods)
+        return True
+
+    def type_unicode(self, text: str) -> bool:
+        """Inject arbitrary Unicode text using KEYEVENTF_UNICODE."""
+        self.send_text(text)
+        return True
+
     def send_text(self, text: str) -> None:
         self._ensure_desktop_attached()
         for char in text:
