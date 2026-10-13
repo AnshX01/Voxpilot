@@ -286,6 +286,18 @@ class VoiceControlSettingsWindow(QtWidgets.QWidget):
         self.enabled.blockSignals(True)
         self.enabled.setChecked(self.engine.mode.value != "sleep")
         self.enabled.blockSignals(False)
+        current = (self.hooks.get("current_mic") or (lambda: None))()
+        if current:
+            i = self.mic.findText(current)
+            if i >= 0:
+                self.mic.blockSignals(True)
+                self.mic.setCurrentIndex(i)
+                self.mic.blockSignals(False)
+                self.settings.microphone = current  # keep the saved choice equal to what the tray is using
+                try:
+                    self.settings.save()
+                except OSError:
+                    pass
         super().showEvent(ev)
 
     # -- actions -------------------------------------------------------------------------------

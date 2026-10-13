@@ -353,7 +353,13 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
                     self._select_microphone(idx)
                     return
 
+        def current_mic():
+            if self._selected_mic is None:
+                return "Automatic"
+            return dict(self.list_input_devices()).get(self._selected_mic)
+
         hooks = {
+            "current_mic": current_mic,
             "list_mics": self.list_input_devices,
             "select_mic": select_mic,
             "set_listening": lambda on: self._start_listening() if on else self._stop_listening(),

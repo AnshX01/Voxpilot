@@ -507,3 +507,31 @@ def test_fade_is_off_by_default_and_dims_only_when_enabled() -> None:
     assert abs(ov._canvas.windowOpacity() - 0.5) < 0.05
     ov.touch()
     assert ov._canvas.windowOpacity() == 1.0
+
+
+def test_settings_toggle_and_mic_call_hooks_and_resync(engine, tmp_path, monkeypatch) -> None:
+    from PySide6 import QtWidgets
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setenv("VOXPILOT_SETTINGS_DIR", str(tmp_path))
+    from voxpilot.app.voice_settings import VoiceControlSettingsWindow
+    e, _, _ = engine
+    calls, state = [], {"mic": "Automatic"}
+    hooks = {
+        "list_mics": lambda: [(1, "Laptop Microphone"), (3, "Headset")],
+        "set_listening": lambda on: calls.append(("listen", on)),
+        "select_mic": lambda name: calls.append(("mic", name)),
+        "current_mic": lambda: state["mic"],
+    }
+    w = VoiceControlSettingsWindow(e, hooks)
+    w.enabled.setChecked(False)
+    w.enabled.setChecked(True)
+    assert calls == [("listen", False), ("listen", True)]
+    w.mic.setCurrentText("Headset")
+    assert ("mic", "Headset") in calls and e.settings.microphone == "Headset"
+    state["mic"] = "Laptop Microphone"  # tray changed the mic while the window was closed
+    w.show()
+    assert w.mic.currentText() == "Laptop Microphone"
+    assert e.settings.microphone == "Laptop Microphone"  # saved choice follows the tray; no capture restart
+    n = len(calls)
+    w.hide(); w.show()
+    assert len(calls) == n
