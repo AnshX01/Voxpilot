@@ -1,4 +1,4 @@
-# run 11
+# run 12
 name: update-source-branch
 on:
   push:
@@ -20,233 +20,197 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply fix11 (inline patch)
+      - name: Apply fix12 (inline patch)
         shell: bash
         run: |
-          cat > vehicle/fix11.patch <<'PATCH_EOF'
+          cat > vehicle/fix12.patch <<'PATCH_EOF'
           diff --git a/src/voxpilot/app/command_catalog.py b/src/voxpilot/app/command_catalog.py
-          index 4abc816..95a12d0 100644
+          index 95a12d0..a3cc292 100644
           --- a/src/voxpilot/app/command_catalog.py
           +++ b/src/voxpilot/app/command_catalog.py
-          @@ -9,7 +9,7 @@ from __future__ import annotations
-           from typing import Dict, List, Tuple
-
-           CATALOG: Dict[str, List[Tuple[str, str]]] = {
-          -    "Basic navigation": [
-          +    "Basic Navigation": [
-                   ("Open <app name>", "Open an app, e.g. Open Mail"),
-                   ("Scroll up / Scroll down", "Scroll the active window"),
-                   ("Click <item name or number>", "Click an item, e.g. Click Done"),
-          @@ -43,5 +43,5 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
-
-           def commands_for_context(ctx: str) -> List[Tuple[str, str, str]]:
-               """Return (category, phrase, description) rows; text-editing first when typing."""
-          -    order = ["Text editing", "Modes", "Overlays", "Basic navigation"] if ctx == "text" else list(CATALOG)
-          +    order = ["Text editing", "Modes", "Overlays", "Basic Navigation"] if ctx == "text" else list(CATALOG)
-               return [(cat, phrase, desc) for cat in order for phrase, desc in CATALOG[cat]]
+          @@ -16,6 +16,7 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
+                   ("Move cursor <direction> <n> pixels", "e.g. Move cursor right 5 pixels"),
+                   ("Stop listening / Start listening", "Pause or resume Voice Control"),
+                   ("Show commands", "List available commands"),
+          +        ("Open Voice Control Tutorial", "Practise essential commands"),
+               ],
+               "Overlays": [
+                   ("Show names / Hide names", "Label items with their names"),
           diff --git a/src/voxpilot/app/commands_window.py b/src/voxpilot/app/commands_window.py
-          index 5bc9b83..1971ac3 100644
+          index 1971ac3..2d708b5 100644
           --- a/src/voxpilot/app/commands_window.py
           +++ b/src/voxpilot/app/commands_window.py
-          @@ -1,7 +1,7 @@
-           """Voice Control Commands window and interactive tutorial (Qt)."""
-           from __future__ import annotations
-
-          -from PySide6 import QtCore, QtWidgets
-          +from PySide6 import QtCore, QtGui, QtWidgets
-
-           from .command_catalog import commands_for_context
-
-          @@ -16,32 +16,53 @@ TUTORIAL_STEPS = [
-
-
-           class CommandsWindow(QtWidgets.QWidget):
-          -    def __init__(self, engine, parent=None) -> None:
-          +    """Small floating "Commands" palette like the guide: grey title, collapsible category,
-          +    one column of phrases with alternating rows. It never takes keyboard focus, so the app
-          +    you are dictating into stays active."""
-          +
-          +    def __init__(self, engine=None, parent=None, rows=None) -> None:
-                   super().__init__(parent)
-          -        self.setWindowTitle("Voice Control Commands")
-          -        self.resize(900, 560)
-          +        self.setWindowTitle("Commands")
-          +        self.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint)
-          +        self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
-          +        self.resize(290, 390)
+          @@ -25,7 +25,6 @@ class CommandsWindow(QtWidgets.QWidget):
+                   self.setWindowTitle("Commands")
+                   self.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint)
+                   self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+          -        self.resize(290, 390)
                    lay = QtWidgets.QVBoxLayout(self)
-          +        lay.setContentsMargins(0, 0, 0, 0)
+                   lay.setContentsMargins(0, 0, 0, 0)
                    self.tree = QtWidgets.QTreeWidget()
-          -        self.tree.setHeaderLabels(["Command", "What it does"])
-          +        self.tree.setHeaderHidden(True)
-          +        self.tree.setAlternatingRowColors(True)
-          +        self.tree.setFocusPolicy(QtCore.Qt.NoFocus)
-          +        self.tree.setIndentation(10)
-          +        self.tree.setFrameShape(QtWidgets.QFrame.NoFrame)
-          +        font = self.tree.font()
-          +        font.setPointSizeF(9.0)
-          +        self.tree.setFont(font)
-          +        self.tree.setStyleSheet(
-          +            "QTreeWidget { background: #f4f2f0; alternate-background-color: #e9e6e3; color: #1d1d1f; }"
-          +            "QTreeWidget::item { padding: 1px 4px; }"
-          +        )
-                   lay.addWidget(self.tree)
-          -        btn = QtWidgets.QPushButton("Open Tutorial")
-          -        btn.clicked.connect(lambda: Tutorial(engine, self).show())
-          -        lay.addWidget(btn)
-          -        ctx = "text" if engine.mode.value in ("dictation", "spelling", "swift") else "general"
-          +        if rows is None:
-          +            ctx = "general"
-          +            if engine is not None and engine.mode.value in ("dictation", "spelling", "swift"):
-          +                ctx = "text"
-          +            rows = commands_for_context(ctx)
-                   cats = {}
-          -        for cat, phrase, desc in commands_for_context(ctx):
-          +        for cat, phrase, desc in rows:
-                       top = cats.get(cat)
-                       if top is None:
-                           top = QtWidgets.QTreeWidgetItem([cat])
-          +                f = top.font(0)
-          +                f.setBold(True)
-          +                top.setFont(0, f)
-          +                top.setForeground(0, QtGui.QBrush(QtGui.QColor(110, 106, 102)))
-                           self.tree.addTopLevelItem(top)
-                           cats[cat] = top
-          -            top.addChild(QtWidgets.QTreeWidgetItem([phrase, desc]))
-          -        self.tree.expandAll()
-          -        self.tree.setWordWrap(True)
-          +            child = QtWidgets.QTreeWidgetItem([phrase])
-          +            child.setToolTip(0, desc)
-          +            top.addChild(child)
-          +        self.tree.expandItem(self.tree.topLevelItem(0))
+          @@ -63,6 +62,23 @@ class CommandsWindow(QtWidgets.QWidget):
+                       top.addChild(child)
+                   self.tree.expandItem(self.tree.topLevelItem(0))
                    self.tree.setTextElideMode(QtCore.Qt.ElideNone)
-          -        self.tree.header().setStretchLastSection(True)
-          -        self.tree.resizeColumnToContents(0)
-          -        self.tree.setColumnWidth(0, max(self.tree.columnWidth(0), 330))
+          +        self._fit_to_content()
+          +
+          +    def _fit_to_content(self) -> None:
+          +        """Bounded palette: wide enough for the longest phrase, tall enough for the open rows."""
+          +        fm = QtGui.QFontMetrics(self.tree.font())
+          +        widest = 0
+          +        for i in range(self.tree.topLevelItemCount()):
+          +            top = self.tree.topLevelItem(i)
+          +            widest = max(widest, fm.horizontalAdvance(top.text(0)) + 30)
+          +            for j in range(top.childCount()):
+          +                widest = max(widest, fm.horizontalAdvance(top.child(j).text(0)) + 40)
+          +        row_h = max(fm.height() + 6, 18)
+          +        visible_rows = 0
+          +        for i in range(self.tree.topLevelItemCount()):
+          +            top = self.tree.topLevelItem(i)
+          +            visible_rows += 1 + (top.childCount() if top.isExpanded() else 0)
+          +        self.resize(max(200, widest), min(520, row_h * visible_rows + 8))
 
 
            class Tutorial(QtWidgets.QDialog):
+          @@ -93,3 +109,42 @@ class Tutorial(QtWidgets.QDialog):
+                   if self.step < len(TUTORIAL_STEPS) and name == TUTORIAL_STEPS[self.step][1]:
+                       self.step += 1
+                       self._render()
+          +
+          +
+          +class SettingsWindow(QtWidgets.QWidget):
+          +    """Voice Control settings. The guide (mh40719) points to this page only for "Open Tutorial" and
+          +    "Commands" (the full command list, including the characters Dictation/Spelling mode accept).
+          +    Language and microphone live in the menu, as in the guide's menu screenshot."""
+          +
+          +    def __init__(self, engine, show_commands, parent=None) -> None:
+          +        super().__init__(parent)
+          +        self.setWindowTitle("Voice Control")
+          +        self.engine = engine
+          +        lay = QtWidgets.QVBoxLayout(self)
+          +        lay.setContentsMargins(20, 16, 20, 16)
+          +        lay.setSpacing(10)
+          +        t = QtWidgets.QLabel("Voice Control")
+          +        f = t.font()
+          +        f.setPointSizeF(13.0)
+          +        f.setBold(True)
+          +        t.setFont(f)
+          +        lay.addWidget(t)
+          +        row = QtWidgets.QHBoxLayout()
+          +        row.addWidget(QtWidgets.QLabel("Tutorial"))
+          +        row.addStretch(1)
+          +        b1 = QtWidgets.QPushButton("Open Tutorial...")
+          +        b1.clicked.connect(lambda: self._open_tutorial())
+          +        row.addWidget(b1)
+          +        lay.addLayout(row)
+          +        row2 = QtWidgets.QHBoxLayout()
+          +        row2.addWidget(QtWidgets.QLabel("Commands"))
+          +        row2.addStretch(1)
+          +        b2 = QtWidgets.QPushButton("Commands...")
+          +        b2.clicked.connect(lambda: show_commands())
+          +        row2.addWidget(b2)
+          +        lay.addLayout(row2)
+          +        self.resize(380, 140)
+          +
+          +    def _open_tutorial(self) -> None:
+          +        self._tutorial = Tutorial(self.engine, self)
+          +        self._tutorial.show()
           diff --git a/src/voxpilot/app/tray.py b/src/voxpilot/app/tray.py
-          index b7fe2d5..f49e0f4 100644
+          index f49e0f4..17f8613 100644
           --- a/src/voxpilot/app/tray.py
           +++ b/src/voxpilot/app/tray.py
-          @@ -295,8 +295,10 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+          @@ -294,11 +294,16 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                   self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Start listening")
 
                def _open_commands_window(self) -> None:
-                   from .commands_window import CommandsWindow
-          -        self._cmd_window = CommandsWindow(self.engine)
-          -        self._cmd_window.show()
-          +        shower = getattr(self.engine.overlay_service, "show_commands_window", None)
-          +        if shower:
-          +            from .command_catalog import commands_for_context
-          +            shower(commands_for_context("general"))
+          -        from .commands_window import CommandsWindow
+          -        shower = getattr(self.engine.overlay_service, "show_commands_window", None)
+          -        if shower:
+          -            from .command_catalog import commands_for_context
+          -            shower(commands_for_context("general"))
+          +        """Voice Control Settings...: the guide's settings page offers Open Tutorial and Commands."""
+          +        from .commands_window import SettingsWindow
+          +        from .command_catalog import CATALOG
+          +
+          +        def show_all_commands() -> None:
+          +            rows = [(c, p, d) for c, items in CATALOG.items() for p, d in items]
+          +            self.engine.overlay_service.show_commands_window(rows)
+          +
+          +        self._cmd_window = SettingsWindow(self.engine, show_all_commands)
+          +        self._cmd_window.show()
 
                def _toggle_listening(self) -> None:
                    if self.engine.mode == EngineMode.SLEEP:
+          diff --git a/src/voxpilot/commands/command_parser.py b/src/voxpilot/commands/command_parser.py
+          index 0df99a9..1b16726 100644
+          --- a/src/voxpilot/commands/command_parser.py
+          +++ b/src/voxpilot/commands/command_parser.py
+          @@ -36,6 +36,7 @@ class CommandParser:
+                       {"intent": "HIDE_NAMES", "patterns": [r"^(?:please\s+)?hide\s+(?:item\s+)?names$", r"^names\s+off$"]},
+                       {"intent": "SHOW_GRID", "patterns": [r"^(?:show|show me)?\s*(?:the\s+)?(?:screen\s+)?grid$", r"^grid\s+on$"]},
+                       {"intent": "HIDE_GRID", "patterns": [r"^(?:please\s+)?hide\s+grid$", r"^grid\s+off$", r"^cancel\s+grid$"]},
+          +            {"intent": "OPEN_TUTORIAL", "patterns": [r"^open\s+(the\s+)?voice\s+control\s+tutorial$"]},
+                       {"intent": "SHOW_COMMANDS", "patterns": [r"^show\s+commands$", r"^what\s+can\s+i\s+say$"]},
+                       {"intent": "WAKE_UP", "patterns": [r"^(?:voxpilot\s+)?wake\s+up(?:\s+voxpilot)?$", r"^start\s+listening$"]},
+                       {"intent": "GO_TO_SLEEP", "patterns": [r"^(?:put\s+voxpilot\s+to\s+sleep|go\s+to\s+sleep|stop\s+listening|sleep)$"]},
           diff --git a/src/voxpilot/engine.py b/src/voxpilot/engine.py
-          index 150871c..bebaab9 100644
+          index bebaab9..0e3080f 100644
           --- a/src/voxpilot/engine.py
           +++ b/src/voxpilot/engine.py
-          @@ -455,6 +455,9 @@ class VoxPilotEngine:
+          @@ -454,6 +454,11 @@ class VoxPilotEngine:
+                       if show:
                            show(self.visible_commands)
                        return CommandResult.success(intent=intent, message="Displayed voice commands")
+          +        elif name == "OPEN_TUTORIAL":
+          +            opener = getattr(self.overlay_service, "show_tutorial", None)
+          +            if opener:
+          +                opener(self)
+          +            return CommandResult.success(intent=intent, message="Opened Voice Control Tutorial")
                    elif name == "HIDE_COMMANDS":
-          +            hider = getattr(self.overlay_service, "hide_commands_window", None)
-          +            if hider:
-          +                hider()
-                       self.overlay_service.hide()
-                       self.overlay_service.update_hud(mode=self.mode, text="Commands Hidden")
-                       return CommandResult.success(intent=intent, message="Commands hidden")
+                       hider = getattr(self.overlay_service, "hide_commands_window", None)
+                       if hider:
           diff --git a/src/voxpilot/overlay/overlay_service.py b/src/voxpilot/overlay/overlay_service.py
-          index b58d197..27aa69b 100644
+          index 27aa69b..9dfa96b 100644
           --- a/src/voxpilot/overlay/overlay_service.py
           +++ b/src/voxpilot/overlay/overlay_service.py
-          @@ -152,10 +152,10 @@ class OverlayCanvas(QtWidgets.QWidget):
-                   return pix
+          @@ -542,6 +542,11 @@ class OverlayService(IOverlayService):
+                   self._commands_window = CommandsWindow(rows=list(rows))
+                   self._commands_window.show()
 
-               def render_grid_badge(self, text: str, framed: bool) -> QtGui.QPixmap:
-          -        font = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold)
-          +        font = QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold)
-                   fm = QtGui.QFontMetrics(font)
-          -        w = max(30, fm.horizontalAdvance(text) + 16)
-          -        h = 30
-          +        w = max(24, fm.horizontalAdvance(text) + 12)
-          +        h = 20
-                   pix = QtGui.QPixmap(w + 6, h + 6)
-                   pix.fill(QtCore.Qt.transparent)
-                   p = QtGui.QPainter(pix)
-          @@ -232,9 +232,6 @@ class OverlayCanvas(QtWidgets.QWidget):
-                   if self.mode == OverlayMode.GRID and self.grid_model is not None:
-                       gm = self.grid_model
-                       b = gm.bounds
-          -            painter.setBrush(QtGui.QColor(0, 0, 0, 18))
-          -            painter.setPen(QtCore.Qt.NoPen)
-          -            painter.drawRect(b.x, b.y, b.w, b.h)
-                       painter.setPen(QtGui.QPen(QtGui.QColor(40, 36, 32, 190), 1.0))
-                       for c in range(gm.cols + 1):
-                           x = b.x + round(c * b.w / gm.cols)
-          @@ -538,6 +535,19 @@ class OverlayService(IOverlayService):
-                       except Exception:
-                           pass
-
-          +    def show_commands_window(self, rows) -> None:
-          +        """Show the floating Commands palette (voice command "Show commands")."""
-          +        from voxpilot.app.commands_window import CommandsWindow
-          +        self.hide_commands_window()
-          +        self._commands_window = CommandsWindow(rows=list(rows))
-          +        self._commands_window.show()
+          +    def show_tutorial(self, engine) -> None:
+          +        from voxpilot.app.commands_window import Tutorial
+          +        self._tutorial = Tutorial(engine)
+          +        self._tutorial.show()
           +
-          +    def hide_commands_window(self) -> None:
-          +        win = getattr(self, "_commands_window", None)
-          +        if win is not None:
-          +            win.close()
-          +            self._commands_window = None
-          +
-               def hide_numbers(self) -> None:
-                   self._is_continuous_numbers = False
-                   if self._current_mode in (OverlayMode.NUMBERS, OverlayMode.CONTINUOUS_NUMBERS):
-          @@ -657,6 +667,7 @@ for _name in (
+               def hide_commands_window(self) -> None:
+                   win = getattr(self, "_commands_window", None)
+                   if win is not None:
+          @@ -667,7 +672,7 @@ for _name in (
                "show_numbers", "show_names", "hide_names", "show_grid", "show_text_numbers",
                "hide_text_numbers", "show_disambiguation", "show_hud", "hide", "hide_numbers",
                "hide_grid", "hide_all", "update_hud", "drill_down_grid", "undo_grid",
-          +    "show_commands_window", "hide_commands_window",
+          -    "show_commands_window", "hide_commands_window",
+          +    "show_commands_window", "hide_commands_window", "show_tutorial",
            ):
                if hasattr(OverlayService, _name):
                    setattr(OverlayService, _name, _marshal(getattr(OverlayService, _name)))
           diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
-          index b87aac3..2cda1c4 100644
+          index 2cda1c4..2403b6b 100644
           --- a/tests/test_voice_control_parity.py
           +++ b/tests/test_voice_control_parity.py
-          @@ -105,7 +105,7 @@ def test_show_commands_context_lists_text_commands_first(engine):
-               assert e.visible_commands[0][0] == "Text editing"
-               say(e, "command mode")
-               say(e, "show commands")
-          -    assert e.visible_commands[0][0] == "Basic navigation"
-          +    assert e.visible_commands[0][0] == "Basic Navigation"
-
-
-           def test_recognizer_is_open_vocabulary_in_every_mode(engine):
-          @@ -300,3 +300,18 @@ def test_mic_test_command_reports_levels(tmp_path, monkeypatch, capsys) -> None:
-               out = capsys.readouterr().out
-               assert "Peak level: 0.3" in out
-               assert (tmp_path / "voxpilot-mic-test.txt").exists()
+          @@ -315,3 +315,10 @@ def test_show_commands_opens_real_palette_and_hide_closes_it() -> None:
+               ov.hide_commands_window()
+               QtWidgets.QApplication.instance().processEvents()
+               assert not win.isVisible()
           +
           +
-          +def test_show_commands_opens_real_palette_and_hide_closes_it() -> None:
-          +    from PySide6 import QtWidgets
-          +    from voxpilot.overlay.overlay_service import OverlayService
-          +    from voxpilot.app.command_catalog import commands_for_context
-          +    ov = OverlayService()
-          +    ov.show_commands_window(commands_for_context("general"))
-          +    win = ov._commands_window
-          +    assert win.isVisible() and win.windowTitle() == "Commands"
-          +    assert win.tree.topLevelItem(0).text(0) == "Basic Navigation"
-          +    assert win.tree.topLevelItem(0).child(0).text(0).startswith("Open")
-          +    ov.hide_commands_window()
-          +    QtWidgets.QApplication.instance().processEvents()
-          +    assert not win.isVisible()
+          +def test_open_voice_control_tutorial_command() -> None:
+          +    from voxpilot.commands.command_parser import CommandParser
+          +    intent = CommandParser().parse("open voice control tutorial")
+          +    assert intent.name == "OPEN_TUTORIAL"
+          +    assert CommandParser().parse("open mail").name != "OPEN_TUTORIAL"
           PATCH_EOF
-          git apply --whitespace=nowarn vehicle/fix11.patch
+          git apply --whitespace=nowarn vehicle/fix12.patch
       - name: Setup and test
         shell: cmd
         run: setup_windows.bat
@@ -262,5 +226,5 @@ jobs:
           git config user.name "voxpilot-parity-bot"
           git config user.email "noreply@users.noreply.github.com"
           git add -A -- . ':!vehicle' ':!.venv' ':!models'
-          git commit -m "Commands palette like the guide; grid badges"
+          git commit -m "Settings window per guide; fitted Commands palette; tutorial command"
           git push origin voxpilot-voice-control-parity
