@@ -1,0 +1,28 @@
+name: publish-source-branch
+on:
+  workflow_dispatch:
+  push:
+    branches: [voxpilot-parity-windows-test]
+    paths: [".github/workflows/publish-source-branch.yml"]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/checkout@v4
+        with:
+          ref: voxpilot-parity-windows-test
+          path: vehicle
+      - name: Apply patch onto main and push source branch
+        run: |
+          git apply --whitespace=nowarn vehicle/1-voxpilot-parity.patch
+          git config user.name "voxpilot-parity-bot"
+          git config user.email "noreply@users.noreply.github.com"
+          git checkout -b voxpilot-voice-control-parity
+          git add -A -- . ':!vehicle'
+          git commit -m "Voice Control parity: dictation wiring, modes, text numbers, grid, tray, commands window"
+          git push origin voxpilot-voice-control-parity
