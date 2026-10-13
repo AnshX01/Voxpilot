@@ -353,3 +353,123 @@ def test_character_list_in_commands_rows() -> None:
     texts = [r[1] for r in rows]
     assert any(t.startswith("question mark") and "?" in t for t in texts)
     assert any(t.startswith("alpha") and t.endswith("a") for t in texts)
+
+
+def test_unsupported_mac_commands_fail_honestly(engine) -> None:
+    from voxpilot.commands.command_parser import CommandParser
+    p = CommandParser()
+    for phrase in ("open siri", "show dock", "search spotlight for cats", "show vocabulary",
+                   "make this speakable", "stop listening mac", "quit mail", "hide safari"):
+        assert p.parse(phrase).name == "UNSUPPORTED_MAC_COMMAND", phrase
+    for phrase in ("hide numbers", "hide names", "hide grid", "hide keyboard", "hide application", "hide commands"):
+        assert p.parse(phrase).name != "UNSUPPORTED_MAC_COMMAND", phrase
+    e, _, _ = engine
+    e.is_running = True
+    res = e.process_text_command("open siri")
+    assert not res.is_success
+
+
+def test_custom_commands_vocabulary_and_settings_roundtrip(engine, tmp_path) -> None:
+    from voxpilot.app.settings_store import VoiceControlSettings
+    e, _, _ = engine
+    e.is_running = True
+    st = VoiceControlSettings(
+        vocabulary=["Kubernetes", "Ansh Saxena"],
+        custom_commands=[{"when_i_say": "sign off", "action": "Insert text", "value": "Regards, Ansh"},
+                         {"when_i_say": "save it", "action": "Press keyboard shortcut", "value": "ctrl+s"}],
+    )
+    typed, keys = [], []
+    e.input_injector.type_unicode = lambda t: typed.append(t) or True
+    e.input_injector.key_combination = lambda k: keys.append(tuple(k)) or True
+    e.apply_settings(st)
+    assert e.process_text_command("sign off").is_success and typed == ["Regards, Ansh"]
+    assert e.process_text_command("save it").is_success and keys == [("ctrl", "s")]
+    assert e._apply_vocabulary("deploy to kubernetis today") == "deploy to Kubernetes today"
+    assert e._apply_vocabulary("hello ansh saxena") == "hello Ansh Saxena"
+    path = st.save(str(tmp_path / "s.json"))
+    again = VoiceControlSettings.load(path)
+    assert again.vocabulary == st.vocabulary and again.custom_commands == st.custom_commands
+
+
+def test_settings_window_matches_guide_options_and_applies(engine, tmp_path, monkeypatch) -> None:
+    from PySide6 import QtWidgets
+    monkeypatch.setenv("VOXPILOT_SETTINGS_DIR", str(tmp_path))
+    from voxpilot.app.voice_settings import VoiceControlSettingsWindow
+    e, _, _ = engine
+    w = VoiceControlSettingsWindow(e, {"list_mics": lambda: [(1, "Laptop Microphone")]})
+    form = w.layout()
+    labels = [form.itemAt(i, QtWidgets.QFormLayout.LabelRole).widget().text()
+              for i in range(form.rowCount()) if form.itemAt(i, QtWidgets.QFormLayout.LabelRole)]
+    assert labels == ["Voice Control", "Language", "Microphone", "Show hints",
+                      "Play sound when command is recognized", "Overlay", "Fade overlay after inactivity",
+                      "Voice Control Tutorial", "Commands", "Vocabulary", "Advanced Actions"]
+    w.hints.setChecked(False)
+    assert e.settings.show_hints is False
+    assert (tmp_path / "settings.json").exists()
+    w.overlay.setCurrentText("Numbered grid")
+    e.overlay_service.show_grid.assert_called()
+    e.overlay_service.hide_all.reset_mock()
+    w.overlay.setCurrentText("None")
+    e.overlay_service.hide_all.assert_called()
+
+
+APPLE_DICTATION_COMMANDS = [
+    # (spoken, expected) from Apple's "Commands for dictating text on Mac" (mh40695)
+    ("a open square bracket b close square bracket", "A [b]"),
+    ("open angle bracket", "<"), ("close angle bracket", ">"),
+    ("go ellipsis", "Go…"), ("hello question mark", "Hello?"),
+    ("tom ampersand jerry", "Tom & jerry"),
+    ("20 degree sign", "20°"),
+    ("x equal sign y", "X = y"), ("x plus sign y", "X + y"),
+    ("x multiplication sign y", "X × y"),
+    ("smiley face", ":-)"), ("frowny face", ":-("), ("winky face", ";-)"),
+    ("cross-eyed laughing face", "XD"),
+    ("acme trademark sign", "Acme™"), ("acme registered sign", "Acme®"), ("acme copyright sign", "Acme©"),
+    ("caps on hello big world caps off done", "Hello Big World done"),
+    ("all caps on usa rules all caps off ok", "USA RULES ok"),
+    ("chapter roman numeral fourteen done", "Chapter XIV done"),
+    ("i have numeral twenty one apples", "I have 21 apples"),
+    ("no space on a b c no space off d", "Abc d"),
+]
+
+
+@pytest.mark.parametrize("spoken,expected", APPLE_DICTATION_COMMANDS)
+def test_apple_dictation_commands(spoken, expected) -> None:
+    from voxpilot.dictation.formatting import FormattingEngine
+    assert FormattingEngine().format_text(spoken) == expected
+
+
+def test_apple_dictation_symbol_table() -> None:
+    from voxpilot.dictation.formatting import PUNCTUATION_PHRASES
+    table = dict(PUNCTUATION_PHRASES)
+    for phrase, char in {"degree sign": "\u00b0", "euro sign": "\u20ac", "yen sign": "\u00a5", "cent sign": "\u00a2",
+                         "pound sterling sign": "\u00a3", "center dot": "\u30fb", "large center dot": "\u25cf",
+                         "begin single quote": "\u2018", "end single quote": "\u2019", "quote": "\u201c",
+                         "end quote": "\u201d", "dash": "\u2013", "hyphen": "-", "caret": "^", "backslash": "\\"}.items():
+        assert table[phrase] == char, phrase
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="needs a real Windows desktop")
+def test_hide_application_really_minimises_notepad() -> None:
+    import ctypes, subprocess, time
+    from voxpilot.engine import VoxPilotEngine
+    proc = subprocess.Popen(["notepad.exe"])
+    try:
+        time.sleep(2.0)
+        u32 = ctypes.windll.user32
+        hwnd = 0
+        for _ in range(20):
+            hwnd = u32.FindWindowW("Notepad", None)
+            if hwnd:
+                break
+            time.sleep(0.25)
+        assert hwnd
+        u32.SetForegroundWindow(hwnd)
+        time.sleep(0.5)
+        if u32.GetForegroundWindow() != hwnd:
+            pytest.skip("runner would not give Notepad the foreground; cannot test minimise")
+        VoxPilotEngine._minimize_foreground(MagicMock(), MagicMock(), "Hid application")
+        time.sleep(0.5)
+        assert u32.IsIconic(hwnd)
+    finally:
+        proc.kill()

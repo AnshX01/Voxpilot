@@ -257,7 +257,7 @@ class OverlayCanvas(QtWidgets.QWidget):
                 painter.drawPixmap(max(0, qr.x() - pix.width() - 2), qr.y() + max(0, (qr.height() - pix.height()) // 2), pix)
 
         # 5. Recognised-command pill (Apple: small light italic pill under the menu bar)
-        if self.hud_text:
+        if self.hud_text and getattr(self, 'hints_enabled', True):
             font_msg = QtGui.QFont("Segoe UI", 10)
             font_msg.setItalic(True)
             painter.setFont(font_msg)
@@ -535,6 +535,34 @@ class OverlayService(IOverlayService):
             except Exception:
                 pass
 
+    def set_fade(self, enabled: bool, seconds: int = 5, amount: float = 0.5) -> None:
+        """"Fade overlay after inactivity": dim the overlay after `seconds` without activity."""
+        self._fade = (bool(enabled), max(1, int(seconds)), min(max(float(amount), 0.0), 0.95))
+        timer = getattr(self, "_fade_timer", None)
+        if timer is None:
+            timer = QtCore.QTimer(self._canvas)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._fade_now)
+            self._fade_timer = timer
+        self.touch()
+
+    def _fade_now(self) -> None:
+        enabled, _secs, amount = getattr(self, "_fade", (False, 5, 0.5))
+        if enabled and self._canvas is not None:
+            self._canvas.setWindowOpacity(1.0 - amount)
+
+    def touch(self) -> None:
+        """Activity happened: restore full opacity and restart the inactivity timer."""
+        if self._canvas is None:
+            return
+        self._canvas.setWindowOpacity(1.0)
+        enabled, secs, _amount = getattr(self, "_fade", (False, 5, 0.5))
+        timer = getattr(self, "_fade_timer", None)
+        if timer is not None:
+            timer.stop()
+            if enabled:
+                timer.start(secs * 1000)
+
     def show_commands_window(self, rows) -> None:
         """Show the floating Commands palette (voice command "Show commands")."""
         from voxpilot.app.commands_window import CommandsWindow
@@ -672,7 +700,7 @@ for _name in (
     "show_numbers", "show_names", "hide_names", "show_grid", "show_text_numbers",
     "hide_text_numbers", "show_disambiguation", "show_hud", "hide", "hide_numbers",
     "hide_grid", "hide_all", "update_hud", "drill_down_grid", "undo_grid",
-    "show_commands_window", "hide_commands_window", "show_tutorial",
+    "show_commands_window", "hide_commands_window", "show_tutorial", "set_fade", "touch",
 ):
     if hasattr(OverlayService, _name):
         setattr(OverlayService, _name, _marshal(getattr(OverlayService, _name)))

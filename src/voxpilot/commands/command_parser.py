@@ -36,6 +36,11 @@ class CommandParser:
             {"intent": "HIDE_NAMES", "patterns": [r"^(?:please\s+)?hide\s+(?:item\s+)?names$", r"^names\s+off$"]},
             {"intent": "SHOW_GRID", "patterns": [r"^(?:show|show me)?\s*(?:the\s+)?(?:screen\s+)?grid$", r"^grid\s+on$"]},
             {"intent": "HIDE_GRID", "patterns": [r"^(?:please\s+)?hide\s+grid$", r"^grid\s+off$", r"^cancel\s+grid$"]},
+            {"intent": "UNSUPPORTED_MAC_COMMAND", "patterns": [
+                r"^show\s+dock$", r"^open\s+siri$", r"^search\s+spotlight\s+for\s+.+$", r"^show\s+vocabulary$",
+                r"^make\s+this\s+speakable$", r"^stop\s+listening\s+mac$",
+                r"^(?:quit|hide)\s+(?!(?:application|keyboard|names?|item names|numbers?|text numbers?|grid|window grid|commands|window)$).+$",
+            ]},
             {"intent": "OPEN_DOCUMENT", "patterns": [r"^open\s+document$"]},
             {"intent": "SAVE_DOCUMENT", "patterns": [r"^save\s+document$"]},
             {"intent": "NEW_ITEM", "patterns": [r"^new\s+item$"]},

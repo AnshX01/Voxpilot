@@ -14,6 +14,53 @@ from ..contracts.dto import EngineMode
 logger = logging.getLogger("voxpilot.app.tray")
 
 
+class _FlatMenuAction(QtWidgets.QWidgetAction):
+    """Plain menu row (no icon column) so its text sits flush with the section headers, like macOS."""
+
+    def __init__(self, text: str, menu: QtWidgets.QMenu) -> None:
+        super().__init__(menu)
+        self._text = text
+        self._menu = menu
+        self._label = QtWidgets.QLabel(text)
+        self._label.setMouseTracking(True)
+        self._label.installEventFilter(self)
+        self._hover = False
+        self.setDefaultWidget(self._label)
+        self.changed.connect(self._restyle)
+        self._restyle()
+
+    def _restyle(self) -> None:
+        if not self.isEnabled():
+            fg, bg = "#8e8a86", "transparent"
+        elif self._hover:
+            fg, bg = "white", "rgb(10,132,255)"
+        else:
+            fg, bg = "#1d1d1f", "transparent"
+        self._label.setStyleSheet(f"padding: 3px 26px 3px 0px; margin: 1px 6px 1px 3px; border-radius: 6px; "
+                                  f"background: {bg}; color: {fg}; font-size: 10.5pt; font-family: 'Segoe UI';")
+
+    def eventFilter(self, obj, ev):  # noqa: N802
+        t = ev.type()
+        if t == QtCore.QEvent.Enter:
+            self._hover = True
+            self._restyle()
+        elif t == QtCore.QEvent.Leave:
+            self._hover = False
+            self._restyle()
+        elif t == QtCore.QEvent.MouseButtonRelease and self.isEnabled():
+            self._menu.close()
+            self.trigger()
+            return True
+        return False
+
+
+
+def _add_flat(menu, text):
+    act = _FlatMenuAction(text, menu)
+    menu.addAction(act)
+    return act
+
+
 class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
     """System tray icon and menu for VoxPilot."""
 
@@ -86,7 +133,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
     def _add_header(menu, text: str, title: bool = False):
         label = QtWidgets.QLabel(text)
         label.setStyleSheet(
-            "padding: 4px 14px 2px 14px; background: transparent; font-size: 10.5pt; "
+            "padding: 4px 8px 2px 3px; background: transparent; font-size: 10.5pt; "
             + ("font-weight: 700; font-size: 11pt; color: #1d1d1f;" if title else "font-weight: 600; color: #8a8681;")
         )
         wa = QtWidgets.QWidgetAction(menu)
@@ -178,9 +225,9 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         menu.setStyleSheet(self._MENU_QSS)
         self._add_header(menu, "Voice Control", title=True)
         menu.addSeparator()
-        self.stop_action = menu.addAction("Stop Listening")
+        self.stop_action = _add_flat(menu, "Stop Listening")
         self.stop_action.triggered.connect(self._stop_listening)
-        self.start_action = menu.addAction("Start Listening")
+        self.start_action = _add_flat(menu, "Start Listening")
         self.start_action.triggered.connect(self._start_listening)
         self.start_action.setEnabled(False)
         menu.addSeparator()
@@ -216,10 +263,10 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         self._selected_mic = None
         menu.aboutToShow.connect(self.refresh_microphones)
         self._mic_anchor = menu.addSeparator()
-        self.settings_action = menu.addAction("Voice Control Settings...")
+        self.settings_action = _add_flat(menu, "Voice Control Settings...")
         self.settings_action.triggered.connect(self._open_commands_window)
         menu.addSeparator()
-        exit_action = menu.addAction("Quit VoxPilot")
+        exit_action = _add_flat(menu, "Quit VoxPilot")
         exit_action.triggered.connect(self._handle_exit)
         # kept for API compatibility (not shown in the Apple-style menu)
         self.status_action = QtGui.QAction("Status: Listening", self)
@@ -294,15 +341,24 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Start listening")
 
     def _open_commands_window(self) -> None:
-        """Voice Control Settings...: the guide's settings page offers Open Tutorial and Commands."""
-        from .commands_window import SettingsWindow
-        from .command_catalog import CATALOG
+        """Voice Control Settings...: Apple's settings page (language, microphone, hints, overlay, commands, vocabulary...)."""
+        from .voice_settings import VoiceControlSettingsWindow
 
-        def show_all_commands() -> None:
-            rows = [(c, p, d) for c, items in CATALOG.items() for p, d in items]
-            self.engine.overlay_service.show_commands_window(rows)
+        def select_mic(name: str) -> None:
+            if name == "Automatic":
+                self._select_microphone(None)
+                return
+            for idx, dev in self.list_input_devices():
+                if dev == name:
+                    self._select_microphone(idx)
+                    return
 
-        self._cmd_window = SettingsWindow(self.engine, show_all_commands)
+        hooks = {
+            "list_mics": self.list_input_devices,
+            "select_mic": select_mic,
+            "set_listening": lambda on: self._start_listening() if on else self._stop_listening(),
+        }
+        self._cmd_window = VoiceControlSettingsWindow(self.engine, hooks)
         self._cmd_window.show()
 
     def _toggle_listening(self) -> None:
@@ -363,6 +419,8 @@ def main() -> int:
     logger.info("Initializing VoxPilot Engine...")
     engine = VoxPilotEngine()
     engine.start(live_mic=not args.no_mic, device_id=args.device)
+    from .settings_store import VoiceControlSettings
+    engine.apply_settings(VoiceControlSettings.load())
 
     def on_exit() -> None:
         logger.info("Shutting down VoxPilot...")

@@ -140,7 +140,8 @@ def test_nato_phonetic_compounds(raw_input: str, expected_output: str) -> None:
 CAPITALIZATION_CASES = [
     ("capitalize next word please", "Word please"),
     ("cap next title here", "Title here"),
-    ("this is all caps very important text", "This is VERY IMPORTANT TEXT"),
+    ("this is all caps very important text", "This is VERY important text"),
+    ("this is all caps on very important all caps off text", "This is VERY IMPORTANT text"),
     ("this is all caps confidential caps off thank you", "This is CONFIDENTIAL thank you"),
     ("start all caps next warning proceed", "Start WARNING proceed"),
     ("start no space next word", "Startword"),

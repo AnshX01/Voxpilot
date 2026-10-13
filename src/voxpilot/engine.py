@@ -4,6 +4,7 @@ Ties together Audio/FakeMic -> Speech Engine -> Command Parser -> Automation -> 
 """
 
 import ctypes
+import re
 from ctypes import wintypes
 import logging
 import threading
@@ -66,6 +67,8 @@ class VoxPilotEngine:
         self._history: List[CommandResult] = []
         self._lock = threading.RLock()
 
+        from voxpilot.app.settings_store import VoiceControlSettings
+        self.settings = VoiceControlSettings()
         self._live_capture: Optional[LiveAudioCapture] = None
         self._capture_thread: Optional[threading.Thread] = None
 
@@ -298,7 +301,84 @@ class VoxPilotEngine:
         self._paint_text_numbers()
         return CommandResult.success(message=f"{op} {n}")
 
+    # ---- Voice Control settings (Apple "Change Voice Control settings" page) -------------------------
+    def apply_settings(self, settings=None) -> None:
+        """Push saved settings into the running engine: custom commands, vocabulary, overlay, hints, sound, fade."""
+        if settings is not None:
+            self.settings = settings
+        st = self.settings
+        self.command_parser.custom_commands.clear()
+        for c in st.custom_commands:
+            self.command_parser.register_custom_command(c["when_i_say"], f'{c["action"]}|{c.get("value", "")}')
+        ov = self.overlay_service
+        for name, val in (("hints_enabled", st.show_hints),):
+            try:
+                setattr(ov, name, val)
+            except Exception:  # pragma: no cover
+                pass
+        setter = getattr(ov, "set_fade", None)
+        if setter:
+            setter(st.fade_overlay, st.fade_after_seconds, st.fade_amount)
+        self._apply_overlay_preference(st.overlay)
+
+    def _apply_overlay_preference(self, choice: str) -> None:
+        """"Overlay" setting: continuously show item names, numbers or the grid."""
+        if choice == "Item numbers":
+            self._handle_show_numbers(Intent(name="SHOW_NUMBERS_CONTINUOUS"), continuous=True)
+        elif choice == "Item names":
+            self.process_text_command("show names")
+        elif choice == "Numbered grid":
+            self.overlay_service.show_grid()
+        elif getattr(self, "_overlay_pref_active", False):
+            self.overlay_service.hide_all()
+        self._overlay_pref_active = choice != "None"
+
+    def _apply_vocabulary(self, text: str) -> str:
+        """Custom vocabulary: correct near-miss recognitions to the user's words and phrases."""
+        import difflib
+        vocab = [v.strip() for v in getattr(self.settings, "vocabulary", []) if v.strip()]
+        if not vocab:
+            return text
+        out = text
+        for term in sorted(vocab, key=len, reverse=True):  # phrases first
+            pat = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
+            out = pat.sub(term, out)
+        words = out.split()
+        singles = {v.lower(): v for v in vocab if " " not in v}
+        fixed = []
+        for w in words:
+            core = w.strip(".,!?;:")
+            hit = difflib.get_close_matches(core.lower(), list(singles), n=1, cutoff=0.82) if len(core) > 3 else []
+            fixed.append(w.replace(core, singles[hit[0]]) if hit else w)
+        return " ".join(fixed)
+
+    def _run_custom_command(self, intent: Intent) -> CommandResult:
+        for c in self.command_parser.custom_commands:
+            if f"CUSTOM_{c['trigger']}" == intent.name:
+                kind, _, value = c["action"].partition("|")
+                break
+        else:
+            return CommandResult.no_match(raw_text=intent.raw_text, message="Unknown custom command")
+        for k, v in (intent.slots or {}).items():  # <text> / <number> placeholders in the value
+            value = value.replace(f"<{k.split('_')[0]}>", str(v))
+        if kind == "Insert text":
+            self.input_injector.type_unicode(value)
+        elif kind == "Press keyboard shortcut":
+            keys = [k.strip().lower() for k in re.split(r"[+\s]+", value) if k.strip()]
+            if not keys:
+                return CommandResult.failure(intent=intent, message="Empty shortcut")
+            self.input_injector.key_combination(keys)
+        elif kind == "Open URL":
+            import webbrowser
+            webbrowser.open(value)
+        elif kind == "Open app":
+            return self.dispatch_intent(Intent(name="OPEN_APP", slots={"app": value}, raw_text=intent.raw_text))
+        else:
+            return CommandResult.failure(intent=intent, message=f"Unsupported action {kind}")
+        return CommandResult.success(intent=intent, message=f"Ran custom command: {c['trigger']}")
+
     def _handle_text_entry(self, text: str) -> None:
+        text = self._apply_vocabulary(text)
         res = self._try_text_number_command(text)
         if res is not None:
             self._record_result(res)
@@ -333,6 +413,8 @@ class VoxPilotEngine:
                 message="Voice Control is paused. Say 'Start listening' to resume.",
             )
 
+        if name.startswith("CUSTOM_"):
+            return self._run_custom_command(intent)
         if name == "SHOW_NUMBERS":
             return self._handle_show_numbers(intent, continuous=False)
         elif name == "SHOW_NUMBERS_CONTINUOUS":
@@ -454,6 +536,12 @@ class VoxPilotEngine:
             if show:
                 show(self.visible_commands)
             return CommandResult.success(intent=intent, message="Displayed voice commands")
+        elif name == "HIDE_APP":
+            return self._minimize_foreground(intent, "Hid application")
+        elif name == "UNSUPPORTED_MAC_COMMAND":
+            self.overlay_service.update_hud(mode=self.mode, text="Not available on Windows",
+                                            error_hint="Not available on Windows")
+            return CommandResult.failure(intent=intent, message=f"'{intent.raw_text}' is a Mac command that VoxPilot does not support on Windows")
         elif name in self._SIMPLE_KEYS:
             keys, msg = self._SIMPLE_KEYS[name]
             self.input_injector.key_combination(list(keys))
@@ -526,8 +614,7 @@ class VoxPilotEngine:
             self.input_injector.key_combination(["alt", "f4"])
             return CommandResult.success(intent=intent, message="Closed window")
         elif name == "MINIMIZE_WINDOW":
-            self.input_injector.key_combination(["win", "down"])
-            return CommandResult.success(intent=intent, message="Minimized window")
+            return self._minimize_foreground(intent, "Minimized window")
         elif name == "MAXIMIZE_WINDOW":
             self.input_injector.key_combination(["win", "up"])
             return CommandResult.success(intent=intent, message="Maximized window")
@@ -867,8 +954,20 @@ class VoxPilotEngine:
         "NEXT_APP": (("alt", "tab"), "Next app"),
         "PREVIOUS_APP": (("alt", "shift", "tab"), "Previous app"),
         "QUIT_APP": (("alt", "f4"), "Quit application"),
-        "HIDE_APP": (("win", "down"), "Hid application"),
-    }
+            }
+
+    def _minimize_foreground(self, intent: Intent, msg: str) -> CommandResult:
+        """Minimise the foreground window with ShowWindow(SW_MINIMIZE); Win+Down only restores a maximised window."""
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return CommandResult.failure(intent=intent, message="No foreground window")
+            user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+            return CommandResult.success(intent=intent, message=msg)
+        except Exception as exc:
+            self.input_injector.key_combination(["win", "down"])
+            return CommandResult.success(intent=intent, message=f"{msg} (fallback Win+Down: {exc})")
 
     def _handle_keyboard(self, intent: Intent, show: bool) -> CommandResult:
         """Windows on-screen keyboard (osk.exe) as the counterpart of the Accessibility Keyboard."""
@@ -902,6 +1001,18 @@ class VoxPilotEngine:
 
     def _record_result(self, res: CommandResult) -> None:
         self._last_result = res
+        try:
+            if getattr(self.settings, "play_sound", False) and res.is_success and res.matched_intent is not None:
+                try:
+                    import winsound
+                    winsound.MessageBeep(winsound.MB_OK)
+                except Exception:
+                    pass
+            touch = getattr(self.overlay_service, "touch", None)
+            if touch:
+                touch()
+        except Exception:  # pragma: no cover
+            logger.exception("post-command feedback failed")
         for cb in list(getattr(self, "result_listeners", [])):
             try:
                 cb(res)

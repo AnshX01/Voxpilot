@@ -59,6 +59,35 @@ NATO_PHONETIC = {
 
 # Spoken punctuation mapping (multi-word phrases first for greedy matching)
 PUNCTUATION_PHRASES = [
+    # Apple "Commands for dictating text" (support.apple.com/guide/mac-help/mh40695) - longest phrases first
+    ("cross-eyed laughing face", "XD"),
+    ("pound sterling sign", "\u00a3"),
+    ("open square bracket", "["),
+    ("close square bracket", "]"),
+    ("open angle bracket", "<"),
+    ("close angle bracket", ">"),
+    ("begin single quote", "\u2018"),
+    ("end single quote", "\u2019"),
+    ("large center dot", "\u25cf"),
+    ("multiplication sign", "\u00d7"),
+    ("greater than sign", ">"),
+    ("less than sign", "<"),
+    ("copyright sign", "\u00a9"),
+    ("registered sign", "\u00ae"),
+    ("trademark sign", "\u2122"),
+    ("smiley face", "\ue000"),
+    ("frowny face", "\ue001"),
+    ("winky face", "\ue002"),
+    ("degree sign", "\u00b0"),
+    ("center dot", "\u30fb"),
+    ("equal sign", "="),
+    ("minus sign", "-"),
+    ("euro sign", "\u20ac"),
+    ("yen sign", "\u00a5"),
+    ("cent sign", "\u00a2"),
+    ("end quote", "\u201d"),
+    ("apostrophe", "\u2018"),
+    ("caret", "^"),
     # Multi-word phrases
     ("exclamation point", "!"),
     ("exclamation mark", "!"),
@@ -77,7 +106,6 @@ PUNCTUATION_PHRASES = [
     ("close quotation", '"'),
     ("open quote", '"'),
     ("close quote", '"'),
-    ("end quote", '"'),
     ("single quote", "'"),
     ("open bracket", "["),
     ("close bracket", "]"),
@@ -112,9 +140,9 @@ PUNCTUATION_PHRASES = [
     ("semicolon", ";"),
     ("newline", "\n"),
     ("tab", "\t"),
-    ("ellipsis", "..."),
+    ("ellipsis", "\u2026"),
     ("hyphen", "-"),
-    ("dash", "-"),
+    ("dash", "\u2013"),
     ("slash", "/"),
     ("backslash", "\\"),
     ("asterisk", "*"),
@@ -126,6 +154,8 @@ PUNCTUATION_PHRASES = [
     ("underscore", "_"),
     ("plus", "+"),
     ("equals", "="),
+    ("quote", "\u201c"),
+    ("point", "."),
     ("tilde", "~"),
     ("pipe", "|"),
 ]
@@ -215,11 +245,51 @@ MONTHS = [
 ]
 
 
+_NUM_UNITS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+              "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+              "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+              "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+_NUM_TOKENS = set(_NUM_UNITS) | {"hundred", "thousand", "and"}
+
+
+def _words_to_int(words):
+    """'twenty one' -> 21, 'one hundred and five' -> 105, 'two thousand' -> 2000; None when not a number."""
+    words = [w for w in words if w != "and"]
+    if not words:
+        return None
+    total = current = 0
+    for w in words:
+        if w in _NUM_UNITS:
+            current += _NUM_UNITS[w]
+        elif w == "hundred":
+            current = max(current, 1) * 100
+        elif w == "thousand":
+            total += max(current, 1) * 1000
+            current = 0
+        else:
+            return None
+    return total + current
+
+
+def _to_roman(n: int) -> str:
+    if n <= 0 or n >= 4000:
+        return str(n)
+    out = ""
+    for val, sym in ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"),
+                     (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+        while n >= val:
+            out += sym
+            n -= val
+    return out
+
+
 class FormattingEngine:
     """Production text formatting engine for speech dictation."""
 
     def __init__(self) -> None:
         self.all_caps_active: bool = False
+        self.title_caps_active: bool = False
+        self.no_space_active: bool = False
         self.sentence_start: bool = True
 
     def phonetic_command(self, command: str) -> str:
@@ -241,6 +311,8 @@ class FormattingEngine:
     def reset_state(self) -> None:
         """Reset ongoing sentence and casing state."""
         self.all_caps_active = False
+        self.title_caps_active = False
+        self.no_space_active = False
         self.sentence_start = True
 
     def format_text(
@@ -279,6 +351,7 @@ class FormattingEngine:
 
         # 8. Clean up internal sentinels
         text = text.replace("\x01", "")
+        text = text.replace("\ue000", ":-)").replace("\ue001", ":-(").replace("\ue002", ";-)")
 
         return text
 
@@ -360,16 +433,53 @@ class FormattingEngine:
                 else ""
             )
 
+            # Apple dictation commands: caps on/off, all caps (next word), all caps on/off, no space on/off,
+            # numeral, roman numeral
+            if three_words == "all caps on":
+                self.all_caps_active = True
+                i += 3
+                continue
+            if three_words == "all caps off":
+                self.all_caps_active = False
+                i += 3
+                continue
+            if three_words == "no space on":
+                self.no_space_active = True
+                i += 3
+                continue
+            if three_words == "no space off":
+                self.no_space_active = False
+                i += 3
+                continue
+            if two_words == "caps on":
+                self.title_caps_active = True
+                i += 2
+                continue
+            if two_words == "caps off":
+                self.title_caps_active = False
+                self.all_caps_active = False
+                i += 2
+                continue
+            if (two_words == "roman numeral") or word == "numeral":
+                k = i + (2 if two_words == "roman numeral" else 1)
+                j = k
+                while j < n and (tokens[j].lower() in _NUM_TOKENS):
+                    j += 1
+                value = _words_to_int([t.lower() for t in tokens[k:j]])
+                if value is not None:
+                    out_tokens.append(_to_roman(value) if two_words == "roman numeral" else str(value))
+                    i = j
+                    continue
             # Check multi-word modifier phrases
             if three_words == "all caps next":
                 all_caps_next = True
                 i += 3
                 continue
             if two_words == "all caps":
-                self.all_caps_active = True
+                all_caps_next = True
                 i += 2
                 continue
-            if two_words in ("caps off", "no caps", "lowercase mode"):
+            if two_words in ("no caps", "lowercase mode"):
                 self.all_caps_active = False
                 i += 2
                 continue
@@ -395,7 +505,7 @@ class FormattingEngine:
             if all_caps_next or self.all_caps_active:
                 curr_word = curr_word.upper()
                 all_caps_next = False
-            elif cap_next:
+            elif cap_next or self.title_caps_active:
                 curr_word = curr_word.capitalize()
                 cap_next = False
             elif lower_next:
@@ -403,7 +513,7 @@ class FormattingEngine:
                 curr_word = "\x01" + curr_word.lower()
                 lower_next = False
 
-            if no_space_next and out_tokens:
+            if (no_space_next or self.no_space_active) and out_tokens:
                 out_tokens[-1] = out_tokens[-1] + curr_word
                 no_space_next = False
             else:
@@ -427,10 +537,10 @@ class FormattingEngine:
         text = re.sub(r"\s+([.,?!:;%)\]}—])", r"\1", text)
 
         # Attach trailing punctuation (. , ? ! : ; % ) ] } — * _ ~) to preceding word
-        text = re.sub(r"\s+([.,?!:;%)\]}—*_~])", r"\1", text)
+        text = re.sub(r"\s+([.,?!:;%)\]}—*_~\u00b0\u00a9\u00ae\u2122\u00a2\u2026\u201d\u2019])", r"\1", text)
 
         # Attach leading symbols to following word: ( [ { $ # @ ~ * \ / |
-        text = re.sub(r"([(\[{])\s+", r"\1", text)
+        text = re.sub(r"([(\[{\u201c\u2018\u00a3\u20ac\u00a5])\s+", r"\1", text)
         text = re.sub(r"([$#@~*\\/|])\s+(\w+)", r"\1\2", text)
 
         # Attach hyphens, em dashes, and underscores without spaces if connecting words

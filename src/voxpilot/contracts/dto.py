@@ -400,6 +400,12 @@ class CommandResult:
         )
 
     @classmethod
+    def failure(cls, intent: Optional[Intent] = None, message: str = "") -> CommandResult:
+        """A recognised command that cannot be carried out (honest failure, not a mismatch)."""
+        return cls(status=CommandStatus.ERROR, code="ERR_UNSUPPORTED", message=message,
+                   matched_intent=intent, error_type="Unsupported")
+
+    @classmethod
     def error(
         cls,
         exception: Exception,
