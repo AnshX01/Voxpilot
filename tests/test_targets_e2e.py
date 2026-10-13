@@ -51,7 +51,14 @@ def test_explorer_voice_control_e2e():
     engine.start()
 
     try:
-        elements = engine.element_provider.discover_elements()
+        # The Explorer window opens asynchronously (slow on CI runners): poll instead of one fixed sleep.
+        elements = []
+        deadline = time.time() + 25
+        while time.time() < deadline:
+            elements = engine.element_provider.discover_elements()
+            if elements:
+                break
+            time.sleep(1.0)
         assert len(elements) > 0
         print(f"\n[Explorer E2E] Discovered {len(elements)} elements in Explorer")
 

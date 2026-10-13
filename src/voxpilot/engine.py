@@ -109,10 +109,20 @@ class VoxPilotEngine:
                 ev = self._dispatch_q.get()
                 if ev is None:
                     return
+                if not self.is_running:
+                    continue  # stopped while this utterance was queued
                 try:
                     self._handle_final_event(ev)
                 except Exception:  # pragma: no cover
                     logger.exception("transcript handling failed")
+                if not self.is_running:
+                    # stop() arrived while this command was in flight: undo its lingering
+                    # on-screen / key-state effects (an already injected click or key cannot be recalled)
+                    try:
+                        self.overlay_service.hide_all()
+                        self.input_injector.release_all_modifiers()
+                    except Exception:  # pragma: no cover
+                        logger.exception("post-stop cleanup failed")
 
         self._dispatch_thread = threading.Thread(target=work, daemon=True, name="voxpilot-dispatch")
         self._dispatch_thread.start()

@@ -75,7 +75,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
     _MENU_QSS = """
     QMenu { background: rgba(244,240,236,245); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
             padding: 8px 6px; icon-size: 26px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
-    QMenu::item { padding: 6px 22px 6px 10px; border-radius: 6px; margin: 1px 4px; }
+    QMenu::item { padding: 6px 26px 6px 10px; border-radius: 6px; margin: 1px 4px; }
     QMenu::item:selected { background: rgba(10,132,255,255); color: white; }
     QMenu::item:disabled { color: #8e8a86; }
     QMenu::separator { height: 1px; background: rgba(0,0,0,30); margin: 6px 14px; }
@@ -86,8 +86,8 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
     def _add_header(menu, text: str, title: bool = False):
         label = QtWidgets.QLabel(text)
         label.setStyleSheet(
-            "padding: 4px 14px 2px 14px; background: transparent; "
-            + ("font-weight: 700; color: #1d1d1f;" if title else "font-weight: 600; color: #6e6a66;")
+            "padding: 6px 14px 3px 14px; background: transparent; font-size: 10.5pt; "
+            + ("font-weight: 700; font-size: 11pt; color: #1d1d1f;" if title else "font-weight: 600; color: #8a8681;")
         )
         wa = QtWidgets.QWidgetAction(menu)
         wa.setDefaultWidget(label)
@@ -138,10 +138,24 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
                 ex, ey = 22 + dx * 12, 22 + dy * 12
                 p.drawLine(ex, ey, ex - dx * 4 + dy * 4, ey - dy * 4 + dx * 4)
                 p.drawLine(ex, ey, ex - dx * 4 - dy * 4, ey - dy * 4 - dx * 4)
+        elif kind == "s":
+            # simplified Swift bird silhouette
+            path = QtGui.QPainterPath()
+            path.moveTo(10, 14)
+            path.cubicTo(18, 24, 26, 28, 33, 30)
+            path.cubicTo(27, 31, 20, 29, 15, 26)
+            path.cubicTo(20, 31, 27, 34, 36, 33)
+            path.cubicTo(38, 31, 38, 26, 34, 21)
+            path.cubicTo(36, 17, 36, 13, 34, 10)
+            path.cubicTo(30, 17, 24, 19, 18, 17)
+            path.cubicTo(15, 16, 12, 15, 10, 14)
+            p.setPen(QtCore.Qt.NoPen)
+            p.setBrush(fg)
+            p.drawPath(path)
         else:
-            f = QtGui.QFont("Segoe UI", 17, QtGui.QFont.Bold)
+            f = QtGui.QFont("Segoe UI", 17, QtGui.QFont.Normal)
             p.setFont(f)
-            p.drawText(QtCore.QRect(0, 0, 44, 44), QtCore.Qt.AlignCenter, "A" if kind == "a" else "S")
+            p.drawText(QtCore.QRect(0, 0, 44, 44), QtCore.Qt.AlignCenter, "A")
         p.end()
         return QtGui.QIcon(px)
 
@@ -375,7 +389,14 @@ def main() -> int:
             3000,
         )
 
-    return app.exec()
+    overlay = getattr(engine, "overlay_service", None)
+    if overlay is not None:
+        overlay.gui_loop_running = True
+    try:
+        return app.exec()
+    finally:
+        if overlay is not None:
+            overlay.gui_loop_running = False
 
 
 if __name__ == "__main__":

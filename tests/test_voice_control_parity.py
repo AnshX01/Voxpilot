@@ -209,6 +209,7 @@ def test_overlay_calls_from_worker_thread_run_on_gui_thread() -> None:
     from PySide6 import QtCore, QtWidgets
     from voxpilot.overlay.overlay_service import OverlayService
     ov = OverlayService()
+    ov.gui_loop_running = True
     gui = threading.get_ident()
     ran = []
     orig = ov._canvas.hide
@@ -223,3 +224,54 @@ def test_overlay_calls_from_worker_thread_run_on_gui_thread() -> None:
         time.sleep(0.01)
     t.join()
     assert ran == [gui]
+
+
+def test_stalled_gui_thread_never_runs_call_inline_or_late() -> None:
+    """Loop flagged running but not serviced: the call is dropped, not run on the worker thread,
+    and does not run later when the GUI thread finally processes events."""
+    import threading
+    from PySide6 import QtWidgets
+    from voxpilot.overlay import overlay_service as osv
+    ov = osv.OverlayService()
+    ov.gui_loop_running = True
+    ran = []
+    orig = ov._canvas.hide
+    ov._canvas.hide = lambda: (ran.append(threading.get_ident()), orig())[1]
+    t = threading.Thread(target=ov.hide_all)
+    t.start()
+    t.join(8)  # GUI thread (this one) never services the queue during the wait
+    assert not t.is_alive()
+    assert ran == []                      # not executed inline on the worker
+    QtWidgets.QApplication.instance().processEvents()
+    assert ran == []                      # and not executed late (cancelled)
+
+
+def test_stop_drops_queued_and_cleans_after_inflight(engine) -> None:
+    import threading, time
+    from voxpilot.contracts.dto import TranscriptEvent
+    e, _, _ = engine
+    e.is_running = True
+    started, release, handled = threading.Event(), threading.Event(), []
+    cleaned = []
+
+    def handler(ev):
+        started.set()
+        release.wait(3)
+        handled.append(ev.text)
+
+    e._handle_final_event = handler
+    e.overlay_service = type("O", (), {"hide_all": lambda s: cleaned.append("hide"),
+                                       "stop_refresh": lambda s: None})()
+    e.input_injector.release_all_modifiers = lambda: cleaned.append("mods")
+    e._start_dispatch_worker()
+    e._on_transcript(TranscriptEvent(text="one", is_final=True))
+    started.wait(2)
+    e._on_transcript(TranscriptEvent(text="two", is_final=True))  # queued behind the in-flight one
+    e.stop()
+    release.set()
+    for _ in range(60):
+        if "hide" in cleaned[2:] or cleaned.count("hide") >= 2:
+            break
+        time.sleep(0.05)
+    assert handled == ["one"]             # queued utterance never ran after stop
+    assert cleaned.count("hide") >= 2     # stop() cleanup plus post-in-flight cleanup

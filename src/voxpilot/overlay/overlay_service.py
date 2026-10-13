@@ -599,19 +599,26 @@ class _GuiInvoker(QtCore.QObject):
 
 
 def _marshal(fn):
+    """Run `fn` on the GUI thread. Off-thread callers are queued to it only while the app's
+    event loop is running (`gui_loop_running`). A queued job that has not started after the
+    timeout is cancelled (never run later, never run on the calling thread); the call then
+    returns None and logs. With no event loop (headless/tests) calls run in the caller's thread
+    exactly as before, since there is no GUI thread to hand off to."""
     import functools
 
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
         invoker = getattr(self, "_invoker", None)
-        if invoker is None or threading.get_ident() == self._gui_ident:
+        if (invoker is None or threading.get_ident() == self._gui_ident
+                or not getattr(self, "gui_loop_running", False)):
             return fn(self, *args, **kwargs)
-        state = {"claimed": False, "done": threading.Event(), "result": None, "error": None}
+        state = {"claimed": False, "cancelled": False, "done": threading.Event(),
+                 "result": None, "error": None}
         lock = threading.Lock()
 
         def job():
             with lock:
-                if state["claimed"]:
+                if state["claimed"] or state["cancelled"]:
                     return
                 state["claimed"] = True
             try:
@@ -622,13 +629,13 @@ def _marshal(fn):
                 state["done"].set()
 
         invoker.call.emit(job)
-        if not state["done"].wait(1.0):
+        if not state["done"].wait(3.0):
             with lock:
                 if not state["claimed"]:
-                    # no GUI event loop is running (headless/tests): run inline as before
-                    state["claimed"] = True
-                    return fn(self, *args, **kwargs)
-            state["done"].wait(5.0)
+                    state["cancelled"] = True
+                    logger.error("GUI thread did not service overlay call %s; dropped", fn.__name__)
+                    return None
+            state["done"].wait(10.0)  # already running on the GUI thread; wait for it
         if state["error"] is not None:
             raise state["error"]
         return state["result"]
