@@ -36,6 +36,15 @@ class CommandParser:
             {"intent": "HIDE_NAMES", "patterns": [r"^(?:please\s+)?hide\s+(?:item\s+)?names$", r"^names\s+off$"]},
             {"intent": "SHOW_GRID", "patterns": [r"^(?:show|show me)?\s*(?:the\s+)?(?:screen\s+)?grid$", r"^grid\s+on$"]},
             {"intent": "HIDE_GRID", "patterns": [r"^(?:please\s+)?hide\s+grid$", r"^grid\s+off$", r"^cancel\s+grid$"]},
+            {"intent": "OPEN_DOCUMENT", "patterns": [r"^open\s+document$"]},
+            {"intent": "SAVE_DOCUMENT", "patterns": [r"^save\s+document$"]},
+            {"intent": "NEW_ITEM", "patterns": [r"^new\s+item$"]},
+            {"intent": "NEXT_APP", "patterns": [r"^next\s+app(?:lication)?$"]},
+            {"intent": "PREVIOUS_APP", "patterns": [r"^previous\s+app(?:lication)?$"]},
+            {"intent": "QUIT_APP", "patterns": [r"^quit\s+application$"]},
+            {"intent": "HIDE_APP", "patterns": [r"^hide\s+application$"]},
+            {"intent": "SHOW_KEYBOARD", "patterns": [r"^show\s+keyboard$"]},
+            {"intent": "HIDE_KEYBOARD", "patterns": [r"^hide\s+keyboard$"]},
             {"intent": "OPEN_TUTORIAL", "patterns": [r"^open\s+(the\s+)?voice\s+control\s+tutorial$"]},
             {"intent": "SHOW_COMMANDS", "patterns": [r"^show\s+commands$", r"^what\s+can\s+i\s+say$"]},
             {"intent": "WAKE_UP", "patterns": [r"^(?:voxpilot\s+)?wake\s+up(?:\s+voxpilot)?$", r"^start\s+listening$"]},
@@ -118,6 +127,12 @@ class CommandParser:
                 slots={"number": num},
                 raw_text=text,
             )
+
+        m_rep = re.match(r"^repeat\s+([a-z0-9]+)\s+times?$", cleaned)
+        if m_rep:
+            cnt = self.normalize_number(m_rep.group(1).strip())
+            if cnt:
+                return Intent(name="REPEAT_COMMAND", confidence=0.95, slots={"count": cnt}, raw_text=text)
 
         # Check key repeat e.g. "press down 5 times", "press tab 3 times"
         m_repeat = re.match(r"^(?:press|hit)\s+([a-z0-9]+)\s+([a-z0-9]+)\s+times?$", cleaned)

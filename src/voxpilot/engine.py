@@ -454,6 +454,14 @@ class VoxPilotEngine:
             if show:
                 show(self.visible_commands)
             return CommandResult.success(intent=intent, message="Displayed voice commands")
+        elif name in self._SIMPLE_KEYS:
+            keys, msg = self._SIMPLE_KEYS[name]
+            self.input_injector.key_combination(list(keys))
+            return CommandResult.success(intent=intent, message=msg)
+        elif name in ("SHOW_KEYBOARD", "HIDE_KEYBOARD"):
+            return self._handle_keyboard(intent, show=(name == "SHOW_KEYBOARD"))
+        elif name == "REPEAT_COMMAND":
+            return self._handle_repeat(intent)
         elif name == "OPEN_TUTORIAL":
             opener = getattr(self.overlay_service, "show_tutorial", None)
             if opener:
@@ -850,6 +858,47 @@ class VoxPilotEngine:
             dx = amount
         self.input_injector.move_cursor_relative(dx, dy)
         return CommandResult.success(intent=intent, message=f"Moved cursor {direction} by {amount}px")
+
+    # Windows equivalents of guide commands (Basic Navigation list); approximations are noted in the docs.
+    _SIMPLE_KEYS = {
+        "OPEN_DOCUMENT": (("ctrl", "o"), "Open document"),
+        "SAVE_DOCUMENT": (("ctrl", "s"), "Saved document"),
+        "NEW_ITEM": (("ctrl", "n"), "New item"),
+        "NEXT_APP": (("alt", "tab"), "Next app"),
+        "PREVIOUS_APP": (("alt", "shift", "tab"), "Previous app"),
+        "QUIT_APP": (("alt", "f4"), "Quit application"),
+        "HIDE_APP": (("win", "down"), "Hid application"),
+    }
+
+    def _handle_keyboard(self, intent: Intent, show: bool) -> CommandResult:
+        """Windows on-screen keyboard (osk.exe) as the counterpart of the Accessibility Keyboard."""
+        import subprocess
+        try:
+            if show:
+                subprocess.Popen(["osk.exe"])
+            else:
+                subprocess.run(["taskkill", "/IM", "osk.exe", "/F"], capture_output=True, timeout=5)
+        except Exception as exc:
+            return CommandResult.failure(intent=intent, message=f"Keyboard: {exc}")
+        return CommandResult.success(intent=intent, message="Keyboard shown" if show else "Keyboard hidden")
+
+    def _handle_repeat(self, intent: Intent) -> CommandResult:
+        """"Repeat <n> times": run the previous command again n times."""
+        count = max(1, min(int(intent.slots.get("count", 1)), 50))
+        prev = None
+        for r in reversed(self._history):
+            mi = getattr(r, "matched_intent", None)
+            if mi is not None and mi.name != "REPEAT_COMMAND":
+                prev = mi
+                break
+        if prev is None:
+            return CommandResult.no_match(raw_text=intent.raw_text, message="Nothing to repeat")
+        res = None
+        for _ in range(count):
+            res = self.dispatch_intent(prev)
+            if not res.is_success:
+                break
+        return res
 
     def _record_result(self, res: CommandResult) -> None:
         self._last_result = res

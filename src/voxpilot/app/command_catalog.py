@@ -17,6 +17,11 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
         ("Stop listening / Start listening", "Pause or resume Voice Control"),
         ("Show commands", "List available commands"),
         ("Open Voice Control Tutorial", "Practise essential commands"),
+        ("Open document / Save document / New item", "Ctrl+O / Ctrl+S / Ctrl+N"),
+        ("Next app / Previous app", "Alt+Tab / Alt+Shift+Tab"),
+        ("Quit application / Hide application", "Alt+F4 / minimise"),
+        ("Show keyboard / Hide keyboard", "Windows on-screen keyboard"),
+        ("Repeat <n> times", "Repeat the previous command"),
     ],
     "Overlays": [
         ("Show names / Hide names", "Label items with their names"),
@@ -42,7 +47,24 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
 }
 
 
+def character_rows() -> List[Tuple[str, str]]:
+    """What to say for each character in Dictation / Spelling mode (guide: Commands > Dictation mode)."""
+    from voxpilot.dictation.formatting import NATO_PHONETIC, PUNCTUATION_PHRASES
+    rows: List[Tuple[str, str]] = []
+    seen = set()
+    for phrase, ch in PUNCTUATION_PHRASES:
+        if phrase not in seen:
+            seen.add(phrase)
+            shown = {"\n": "new line", "\n\n": "new paragraph"}.get(ch, ch)
+            rows.append((f"{phrase}  =  {shown}", "Say this to enter the character"))
+    for word, ch in sorted(NATO_PHONETIC.items()):
+        rows.append((f"{word}  =  {ch}", "Spelling mode code word"))
+    return rows
+
+
 def commands_for_context(ctx: str) -> List[Tuple[str, str, str]]:
     """Return (category, phrase, description) rows; text-editing first when typing."""
     order = ["Text editing", "Modes", "Overlays", "Basic Navigation"] if ctx == "text" else list(CATALOG)
-    return [(cat, phrase, desc) for cat in order for phrase, desc in CATALOG[cat]]
+    rows = [(cat, phrase, desc) for cat in order for phrase, desc in CATALOG[cat]]
+    rows += [("Dictation and Spelling characters", p, d) for p, d in character_rows()]
+    return rows

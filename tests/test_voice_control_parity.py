@@ -322,3 +322,34 @@ def test_open_voice_control_tutorial_command() -> None:
     intent = CommandParser().parse("open voice control tutorial")
     assert intent.name == "OPEN_TUTORIAL"
     assert CommandParser().parse("open mail").name != "OPEN_TUTORIAL"
+
+
+def test_guide_basic_navigation_windows_equivalents_parse() -> None:
+    from voxpilot.commands.command_parser import CommandParser
+    p = CommandParser()
+    expect = {"open document": "OPEN_DOCUMENT", "save document": "SAVE_DOCUMENT", "new item": "NEW_ITEM",
+              "next app": "NEXT_APP", "previous app": "PREVIOUS_APP", "quit application": "QUIT_APP",
+              "hide application": "HIDE_APP", "show keyboard": "SHOW_KEYBOARD",
+              "hide keyboard": "HIDE_KEYBOARD", "repeat 3 times": "REPEAT_COMMAND"}
+    for phrase, name in expect.items():
+        assert p.parse(phrase).name == name, phrase
+    assert p.parse("open mail").name == "OPEN_APP"
+
+
+def test_repeat_runs_previous_command_n_times(engine) -> None:
+    e, _, _ = engine
+    e.is_running = True
+    keys = []
+    e.input_injector.key_combination = lambda k: keys.append(tuple(k)) or True
+    assert e.process_text_command("save document").is_success
+    assert e.process_text_command("repeat 3 times").is_success
+    assert keys == [("ctrl", "s")] * 4
+    assert e.process_text_command("hide application").is_success
+
+
+def test_character_list_in_commands_rows() -> None:
+    from voxpilot.app.command_catalog import commands_for_context
+    rows = [r for r in commands_for_context("general") if r[0] == "Dictation and Spelling characters"]
+    texts = [r[1] for r in rows]
+    assert any(t.startswith("question mark") and "?" in t for t in texts)
+    assert any(t.startswith("alpha") and t.endswith("a") for t in texts)
