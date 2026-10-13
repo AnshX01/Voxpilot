@@ -1,4 +1,4 @@
-# run 5
+# run 6
 name: update-source-branch
 on:
   push:
@@ -20,95 +20,200 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply update patch
-        shell: pwsh
-        run: git apply --whitespace=nowarn vehicle/2-fix2.patch
-      - name: Apply fix3 (inline patch)
+      - name: Apply fix4 (inline patch)
         shell: bash
         run: |
-          cat > vehicle/fix3.patch <<'PATCH_EOF'
-          From 1c97386dee13ef3b1b13bc05be2b9db2d324278f Mon Sep 17 00:00:00 2001
+          cat > vehicle/fix4.patch <<'PATCH_EOF'
+          From c534dad6d402ca83073ffe8fdb00a09ca27fade1 Mon Sep 17 00:00:00 2001
           From: audit <a@b.c>
-          Date: Tue, 13 Oct 2026 19:33:26 +0530
-          Subject: [PATCH] Stop numbers refresh timer before teardown; guard re-entrancy
-           (fixes Windows access violation in stop)
+          Date: Tue, 13 Oct 2026 22:03:15 +0530
+          Subject: [PATCH] Continuous listening: handle transcripts off the audio
+           thread; Apple-style round mode icons in tray menu
 
           ---
-           src/voxpilot/engine.py                  |  8 ++++++++
-           src/voxpilot/overlay/overlay_service.py | 10 ++++++++++
-           tests/test_voice_control_parity.py      |  1 +
-           3 files changed, 19 insertions(+)
+           src/voxpilot/app/tray.py           | 42 ++++++++++++++++++++++++++++++
+           src/voxpilot/engine.py             | 33 +++++++++++++++++++++++
+           tests/test_voice_control_parity.py | 27 +++++++++++++++++++
+           3 files changed, 102 insertions(+)
 
+          diff --git a/src/voxpilot/app/tray.py b/src/voxpilot/app/tray.py
+          index d50efc7..ef09265 100644
+          --- a/src/voxpilot/app/tray.py
+          +++ b/src/voxpilot/app/tray.py
+          @@ -72,6 +72,44 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                   ("Swift Mode", EngineMode.SWIFT),
+               )
+
+          +    @staticmethod
+          +    def _mode_icon(kind: str, active: bool) -> QtGui.QIcon:
+          +        """Round icon like the guide's menu: blue circle when active, grey otherwise."""
+          +        px = QtGui.QPixmap(44, 44)
+          +        px.fill(QtCore.Qt.transparent)
+          +        p = QtGui.QPainter(px)
+          +        p.setRenderHint(QtGui.QPainter.Antialiasing)
+          +        p.setPen(QtCore.Qt.NoPen)
+          +        p.setBrush(QtGui.QColor(10, 132, 255) if active else QtGui.QColor(215, 210, 205))
+          +        p.drawEllipse(2, 2, 40, 40)
+          +        fg = QtGui.QColor(255, 255, 255) if active else QtGui.QColor(70, 66, 62)
+          +        p.setPen(QtGui.QPen(fg, 3, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
+          +        if kind == "mic":
+          +            p.setBrush(fg)
+          +            p.drawRoundedRect(18, 9, 8, 17, 4, 4)
+          +            p.setBrush(QtCore.Qt.NoBrush)
+          +            p.drawArc(13, 14, 18, 17, 180 * 16, 180 * 16)
+          +            p.drawLine(22, 31, 22, 36)
+          +        elif kind == "move":
+          +            for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+          +                p.drawLine(22, 22, 22 + dx * 12, 22 + dy * 12)
+          +                ex, ey = 22 + dx * 12, 22 + dy * 12
+          +                p.drawLine(ex, ey, ex - dx * 4 + dy * 4, ey - dy * 4 + dx * 4)
+          +                p.drawLine(ex, ey, ex - dx * 4 - dy * 4, ey - dy * 4 - dx * 4)
+          +        else:
+          +            f = QtGui.QFont("Segoe UI", 17, QtGui.QFont.Bold)
+          +            p.setFont(f)
+          +            p.drawText(QtCore.QRect(0, 0, 44, 44), QtCore.Qt.AlignCenter, "A" if kind == "a" else "S")
+          +        p.end()
+          +        return QtGui.QIcon(px)
+          +
+          +    _MODE_ICON_KIND = {EngineMode.DICTATION: "mic", EngineMode.COMMAND: "move",
+          +                       EngineMode.SPELLING: "a", EngineMode.SWIFT: "s"}
+          +
+          +    def _refresh_mode_icons(self) -> None:
+          +        for mode, act in self.mode_actions.items():
+          +            act.setIcon(self._mode_icon(self._MODE_ICON_KIND[mode], act.isChecked()))
+          +
+               def _create_menu(self) -> None:
+                   menu = QtWidgets.QMenu()
+                   self._menu = menu  # keep the Python wrapper alive; setContextMenu doesn't take ownership
+          @@ -94,6 +132,8 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                       act.triggered.connect(lambda _=False, m=mode: self._set_mode(m))
+                       self.mode_actions[mode] = act
+                   self.mode_actions[EngineMode.DICTATION].setChecked(True)
+          +        self.mode_group.triggered.connect(lambda _a: self._refresh_mode_icons())
+          +        self._refresh_mode_icons()
+                   menu.addSeparator()
+                   menu.addSection("Language")
+                   lang = menu.addAction("English")
+          @@ -128,6 +168,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+               def _set_mode(self, mode: EngineMode) -> None:
+                   self.engine.mode = mode
+                   self.mode_actions[mode].setChecked(True)
+          +        self._refresh_mode_icons()
+                   self.engine.overlay_service.update_hud(mode=mode, text=dict((m, l) for l, m in self.MODES)[mode])
+
+               @staticmethod
+          @@ -184,6 +225,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                   self.stop_action.setEnabled(True)
+                   self.start_action.setEnabled(False)
+                   self.mode_actions.get(self.engine.mode, self.mode_actions[EngineMode.DICTATION]).setChecked(True)
+          +        self._refresh_mode_icons()
+                   self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Start listening")
+
+               def _open_commands_window(self) -> None:
           diff --git a/src/voxpilot/engine.py b/src/voxpilot/engine.py
-          index 94a7fb2..60678ae 100644
+          index 60678ae..3c33a18 100644
           --- a/src/voxpilot/engine.py
           +++ b/src/voxpilot/engine.py
-          @@ -103,6 +103,9 @@ class VoxPilotEngine:
-
-               def _refresh_numbers(self) -> None:
-                   """Keep on-screen numbers in step with the screen while they are shown (GUI-thread timer)."""
-          +        if getattr(self, "_refreshing", False) or not self.is_running:
-          +            return
-          +        self._refreshing = True
+          @@ -86,6 +86,7 @@ class VoxPilotEngine:
                    try:
-                       ov = self.overlay_service
-                       if not ov.is_numbers_visible() or self.mode == EngineMode.SLEEP:
-          @@ -115,6 +118,8 @@ class VoxPilotEngine:
-                           ov.show_numbers(elements, continuous=ov.is_continuous_numbers())
-                   except Exception:  # pragma: no cover
-                       logger.exception("numbers refresh failed")
-          +        finally:
-          +            self._refreshing = False
+                       self._live_capture = LiveAudioCapture()
+                       self._live_capture.start(device_id=device_id)
+          +            self._start_dispatch_worker()
+                       self._capture_thread = threading.Thread(target=self._capture_worker, daemon=True)
+                       self._capture_thread.start()
+                       logger.info("Live microphone capture started successfully.")
+          @@ -95,6 +96,27 @@ class VoxPilotEngine:
+                       self._live_capture = None
+                       return False
 
-               def stop_live_capture(self) -> None:
-                   if self._live_capture:
-          @@ -125,6 +130,9 @@ class VoxPilotEngine:
+          +    def _start_dispatch_worker(self) -> None:
+          +        """Run command/dictation handling off the audio thread so mic capture never stalls
+          +        while a click, UIA scan or text injection is in progress (keeps listening continuous)."""
+          +        import queue as _q
+          +        if getattr(self, "_dispatch_thread", None) and self._dispatch_thread.is_alive():
+          +            return
+          +        self._dispatch_q = _q.Queue()
+          +
+          +        def work() -> None:
+          +            while True:
+          +                ev = self._dispatch_q.get()
+          +                if ev is None:
+          +                    return
+          +                try:
+          +                    self._handle_final_event(ev)
+          +                except Exception:  # pragma: no cover
+          +                    logger.exception("transcript handling failed")
+          +
+          +        self._dispatch_thread = threading.Thread(target=work, daemon=True, name="voxpilot-dispatch")
+          +        self._dispatch_thread.start()
+          +
+               def _capture_worker(self) -> None:
+                   while self.is_running and self._live_capture and self._live_capture.is_running:
+                       chunk = self._live_capture.read_chunk(timeout=0.2)
+          @@ -129,6 +151,10 @@ class VoxPilotEngine:
+               def stop(self) -> None:
                    self.is_running = False
                    self.stop_live_capture()
+          +        q = getattr(self, "_dispatch_q", None)
+          +        if q is not None:
+          +            q.put(None)
+          +            self._dispatch_q = None
                    self.speech_engine.stop()
-          +        stopper = getattr(self.overlay_service, "stop_refresh", None)
-          +        if callable(stopper):
-          +            stopper()
-                   self.overlay_service.hide_all()
-                   self.input_injector.release_all_modifiers()
+                   stopper = getattr(self.overlay_service, "stop_refresh", None)
+                   if callable(stopper):
+          @@ -156,6 +182,13 @@ class VoxPilotEngine:
+                       self.overlay_service.update_hud(mode=self.mode, text=event.text)
+                       return
 
-          diff --git a/src/voxpilot/overlay/overlay_service.py b/src/voxpilot/overlay/overlay_service.py
-          index c74f36b..d368ec3 100644
-          --- a/src/voxpilot/overlay/overlay_service.py
-          +++ b/src/voxpilot/overlay/overlay_service.py
-          @@ -528,6 +528,16 @@ class OverlayService(IOverlayService):
-                   timer.timeout.connect(callback)
-                   timer.start(interval_ms)
-
-          +    def stop_refresh(self) -> None:
-          +        """Stop the periodic refresh timer (before teardown, so no callback runs mid-hide)."""
-          +        timer = getattr(self, "_refresh_timer", None)
-          +        if timer is not None:
-          +            try:
-          +                timer.stop()
-          +                timer.timeout.disconnect()
-          +            except Exception:
-          +                pass
+          +        q = getattr(self, "_dispatch_q", None)
+          +        if q is not None and getattr(self, "_dispatch_thread", None) and self._dispatch_thread.is_alive():
+          +            q.put(event)
+          +            return
+          +        self._handle_final_event(event)
           +
-               def hide_numbers(self) -> None:
-                   self._is_continuous_numbers = False
-                   if self._current_mode in (OverlayMode.NUMBERS, OverlayMode.CONTINUOUS_NUMBERS):
+          +    def _handle_final_event(self, event: TranscriptEvent) -> None:
+                   text = event.text.strip()
+                   if not text or text == "[unk]":
+                       return
           diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
-          index fca9ee4..68cc4e1 100644
+          index 68cc4e1..4c64eb6 100644
           --- a/tests/test_voice_control_parity.py
           +++ b/tests/test_voice_control_parity.py
-          @@ -156,6 +156,7 @@ def test_tray_microphone_choice_restarts_capture(monkeypatch) -> None:
-           def test_numbers_refresh_follows_the_screen(engine) -> None:
-               """Numbers must update when the screen changes, not stay a one-shot snapshot."""
-               e, _, _ = engine
+          @@ -174,3 +174,30 @@ def test_numbers_refresh_follows_the_screen(engine) -> None:
+               e.element_provider.discover_elements = lambda *a, **k: [el(1, 99)]
+               e._refresh_numbers()
+               assert shown == [[5], [99]]
+          +
+          +
+          +def test_final_transcripts_are_handled_off_the_audio_thread(engine) -> None:
+          +    """A slow command must not block the thread feeding audio (continuous listening)."""
+          +    import threading, time
+          +    from voxpilot.contracts.dto import TranscriptEvent
+          +    e, _, _ = engine
           +    e.is_running = True
-               from voxpilot.contracts.dto import LabeledElement, ScreenRect
-
-               def el(i, x):
+          +    seen = []
+          +    gate = threading.Event()
+          +
+          +    def slow(ev):
+          +        gate.wait(2)
+          +        seen.append((ev.text, threading.current_thread().name))
+          +
+          +    e._handle_final_event = slow
+          +    e._start_dispatch_worker()
+          +    t0 = time.perf_counter()
+          +    e._on_transcript(TranscriptEvent(text="hello world", is_final=True))
+          +    assert time.perf_counter() - t0 < 0.5  # returned immediately while handler is blocked
+          +    gate.set()
+          +    for _ in range(40):
+          +        if seen:
+          +            break
+          +        time.sleep(0.05)
+          +    assert seen and seen[0][1] == "voxpilot-dispatch"
+          +    e.stop()
           -- 
           2.34.1
           PATCH_EOF
-          git apply --whitespace=nowarn vehicle/fix3.patch
+          git apply --whitespace=nowarn vehicle/fix4.patch
       - name: Setup and test
         shell: cmd
         run: setup_windows.bat
@@ -124,5 +229,5 @@ jobs:
           git config user.name "voxpilot-parity-bot"
           git config user.email "noreply@users.noreply.github.com"
           git add -A -- . ':!vehicle' ':!.venv' ':!models'
-          git commit -m "Fix live listening and numbers lifecycle"
+          git commit -m "Continuous listening off audio thread; mode icons"
           git push origin voxpilot-voice-control-parity
