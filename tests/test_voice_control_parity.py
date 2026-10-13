@@ -315,3 +315,10 @@ def test_show_commands_opens_real_palette_and_hide_closes_it() -> None:
     ov.hide_commands_window()
     QtWidgets.QApplication.instance().processEvents()
     assert not win.isVisible()
+
+
+def test_open_voice_control_tutorial_command() -> None:
+    from voxpilot.commands.command_parser import CommandParser
+    intent = CommandParser().parse("open voice control tutorial")
+    assert intent.name == "OPEN_TUTORIAL"
+    assert CommandParser().parse("open mail").name != "OPEN_TUTORIAL"

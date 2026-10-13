@@ -36,6 +36,7 @@ class CommandParser:
             {"intent": "HIDE_NAMES", "patterns": [r"^(?:please\s+)?hide\s+(?:item\s+)?names$", r"^names\s+off$"]},
             {"intent": "SHOW_GRID", "patterns": [r"^(?:show|show me)?\s*(?:the\s+)?(?:screen\s+)?grid$", r"^grid\s+on$"]},
             {"intent": "HIDE_GRID", "patterns": [r"^(?:please\s+)?hide\s+grid$", r"^grid\s+off$", r"^cancel\s+grid$"]},
+            {"intent": "OPEN_TUTORIAL", "patterns": [r"^open\s+(the\s+)?voice\s+control\s+tutorial$"]},
             {"intent": "SHOW_COMMANDS", "patterns": [r"^show\s+commands$", r"^what\s+can\s+i\s+say$"]},
             {"intent": "WAKE_UP", "patterns": [r"^(?:voxpilot\s+)?wake\s+up(?:\s+voxpilot)?$", r"^start\s+listening$"]},
             {"intent": "GO_TO_SLEEP", "patterns": [r"^(?:put\s+voxpilot\s+to\s+sleep|go\s+to\s+sleep|stop\s+listening|sleep)$"]},

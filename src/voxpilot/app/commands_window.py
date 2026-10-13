@@ -25,7 +25,6 @@ class CommandsWindow(QtWidgets.QWidget):
         self.setWindowTitle("Commands")
         self.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint)
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
-        self.resize(290, 390)
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.tree = QtWidgets.QTreeWidget()
@@ -63,6 +62,23 @@ class CommandsWindow(QtWidgets.QWidget):
             top.addChild(child)
         self.tree.expandItem(self.tree.topLevelItem(0))
         self.tree.setTextElideMode(QtCore.Qt.ElideNone)
+        self._fit_to_content()
+
+    def _fit_to_content(self) -> None:
+        """Bounded palette: wide enough for the longest phrase, tall enough for the open rows."""
+        fm = QtGui.QFontMetrics(self.tree.font())
+        widest = 0
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            widest = max(widest, fm.horizontalAdvance(top.text(0)) + 30)
+            for j in range(top.childCount()):
+                widest = max(widest, fm.horizontalAdvance(top.child(j).text(0)) + 40)
+        row_h = max(fm.height() + 6, 18)
+        visible_rows = 0
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            visible_rows += 1 + (top.childCount() if top.isExpanded() else 0)
+        self.resize(max(200, widest), min(520, row_h * visible_rows + 8))
 
 
 class Tutorial(QtWidgets.QDialog):
@@ -93,3 +109,42 @@ class Tutorial(QtWidgets.QDialog):
         if self.step < len(TUTORIAL_STEPS) and name == TUTORIAL_STEPS[self.step][1]:
             self.step += 1
             self._render()
+
+
+class SettingsWindow(QtWidgets.QWidget):
+    """Voice Control settings. The guide (mh40719) points to this page only for "Open Tutorial" and
+    "Commands" (the full command list, including the characters Dictation/Spelling mode accept).
+    Language and microphone live in the menu, as in the guide's menu screenshot."""
+
+    def __init__(self, engine, show_commands, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Voice Control")
+        self.engine = engine
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(10)
+        t = QtWidgets.QLabel("Voice Control")
+        f = t.font()
+        f.setPointSizeF(13.0)
+        f.setBold(True)
+        t.setFont(f)
+        lay.addWidget(t)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Tutorial"))
+        row.addStretch(1)
+        b1 = QtWidgets.QPushButton("Open Tutorial...")
+        b1.clicked.connect(lambda: self._open_tutorial())
+        row.addWidget(b1)
+        lay.addLayout(row)
+        row2 = QtWidgets.QHBoxLayout()
+        row2.addWidget(QtWidgets.QLabel("Commands"))
+        row2.addStretch(1)
+        b2 = QtWidgets.QPushButton("Commands...")
+        b2.clicked.connect(lambda: show_commands())
+        row2.addWidget(b2)
+        lay.addLayout(row2)
+        self.resize(380, 140)
+
+    def _open_tutorial(self) -> None:
+        self._tutorial = Tutorial(self.engine, self)
+        self._tutorial.show()

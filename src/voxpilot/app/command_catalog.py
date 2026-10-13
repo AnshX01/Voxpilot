@@ -16,6 +16,7 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
         ("Move cursor <direction> <n> pixels", "e.g. Move cursor right 5 pixels"),
         ("Stop listening / Start listening", "Pause or resume Voice Control"),
         ("Show commands", "List available commands"),
+        ("Open Voice Control Tutorial", "Practise essential commands"),
     ],
     "Overlays": [
         ("Show names / Hide names", "Label items with their names"),

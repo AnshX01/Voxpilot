@@ -454,6 +454,11 @@ class VoxPilotEngine:
             if show:
                 show(self.visible_commands)
             return CommandResult.success(intent=intent, message="Displayed voice commands")
+        elif name == "OPEN_TUTORIAL":
+            opener = getattr(self.overlay_service, "show_tutorial", None)
+            if opener:
+                opener(self)
+            return CommandResult.success(intent=intent, message="Opened Voice Control Tutorial")
         elif name == "HIDE_COMMANDS":
             hider = getattr(self.overlay_service, "hide_commands_window", None)
             if hider:

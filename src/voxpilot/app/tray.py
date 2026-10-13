@@ -294,11 +294,16 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Start listening")
 
     def _open_commands_window(self) -> None:
-        from .commands_window import CommandsWindow
-        shower = getattr(self.engine.overlay_service, "show_commands_window", None)
-        if shower:
-            from .command_catalog import commands_for_context
-            shower(commands_for_context("general"))
+        """Voice Control Settings...: the guide's settings page offers Open Tutorial and Commands."""
+        from .commands_window import SettingsWindow
+        from .command_catalog import CATALOG
+
+        def show_all_commands() -> None:
+            rows = [(c, p, d) for c, items in CATALOG.items() for p, d in items]
+            self.engine.overlay_service.show_commands_window(rows)
+
+        self._cmd_window = SettingsWindow(self.engine, show_all_commands)
+        self._cmd_window.show()
 
     def _toggle_listening(self) -> None:
         if self.engine.mode == EngineMode.SLEEP:

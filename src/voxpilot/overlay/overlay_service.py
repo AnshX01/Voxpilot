@@ -542,6 +542,11 @@ class OverlayService(IOverlayService):
         self._commands_window = CommandsWindow(rows=list(rows))
         self._commands_window.show()
 
+    def show_tutorial(self, engine) -> None:
+        from voxpilot.app.commands_window import Tutorial
+        self._tutorial = Tutorial(engine)
+        self._tutorial.show()
+
     def hide_commands_window(self) -> None:
         win = getattr(self, "_commands_window", None)
         if win is not None:
@@ -667,7 +672,7 @@ for _name in (
     "show_numbers", "show_names", "hide_names", "show_grid", "show_text_numbers",
     "hide_text_numbers", "show_disambiguation", "show_hud", "hide", "hide_numbers",
     "hide_grid", "hide_all", "update_hud", "drill_down_grid", "undo_grid",
-    "show_commands_window", "hide_commands_window",
+    "show_commands_window", "hide_commands_window", "show_tutorial",
 ):
     if hasattr(OverlayService, _name):
         setattr(OverlayService, _name, _marshal(getattr(OverlayService, _name)))
