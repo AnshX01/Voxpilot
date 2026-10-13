@@ -51,15 +51,46 @@ class VoxPilotEngine:
         self._history: List[CommandResult] = []
         self._lock = threading.RLock()
 
+        self._live_capture: Optional[LiveAudioCapture] = None
+        self._capture_thread: Optional[threading.Thread] = None
+
         self.speech_engine.subscribe(self._on_transcript)
 
-    def start(self) -> None:
+    def start(self, live_mic: bool = False, device_id: Optional[int] = None) -> None:
         self.is_running = True
         self.speech_engine.start()
         self.overlay_service.update_hud(mode=self.mode, text="Ready")
+        if live_mic:
+            self.start_live_capture(device_id=device_id)
+
+    def start_live_capture(self, device_id: Optional[int] = None) -> bool:
+        """Start WASAPI microphone capture streaming audio chunks to speech engine."""
+        try:
+            self._live_capture = LiveAudioCapture()
+            self._live_capture.start(device_id=device_id)
+            self._capture_thread = threading.Thread(target=self._capture_worker, daemon=True)
+            self._capture_thread.start()
+            logger.info("Live microphone capture started successfully.")
+            return True
+        except Exception as exc:
+            logger.warning(f"Could not start live microphone capture: {exc}")
+            self._live_capture = None
+            return False
+
+    def _capture_worker(self) -> None:
+        while self.is_running and self._live_capture and self._live_capture.is_running:
+            chunk = self._live_capture.read_chunk(timeout=0.2)
+            if chunk:
+                self.speech_engine.process_audio(chunk)
+
+    def stop_live_capture(self) -> None:
+        if self._live_capture:
+            self._live_capture.stop()
+            self._live_capture = None
 
     def stop(self) -> None:
         self.is_running = False
+        self.stop_live_capture()
         self.speech_engine.stop()
         self.overlay_service.hide_all()
         self.input_injector.release_all_modifiers()

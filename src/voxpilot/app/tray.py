@@ -33,6 +33,14 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
 
         self._create_icon()
         self._create_menu()
+        self.activated.connect(self._on_activated)
+
+    def _on_activated(self, reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QtWidgets.QSystemTrayIcon.ActivationReason.Trigger,
+            QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._toggle_numbers()
 
     def _create_icon(self) -> None:
         """Generate a crisp high-DPI procedural tray icon."""
@@ -133,3 +141,71 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         if self.on_exit:
             self.on_exit()
         QtWidgets.QApplication.quit()
+
+
+def main() -> int:
+    """Launch VoxPilot system tray application."""
+    import argparse
+    import signal
+    import sys
+    from ..engine import VoxPilotEngine
+
+    parser = argparse.ArgumentParser(description="VoxPilot Voice Control System Tray App")
+    parser.add_argument("--no-mic", action="store_true", help="Start without live microphone capture")
+    parser.add_argument("--device", type=int, default=None, help="Audio input device index")
+    args, _ = parser.parse_known_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        app = QtWidgets.QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+
+    logger.info("Initializing VoxPilot Engine...")
+    engine = VoxPilotEngine()
+    engine.start(live_mic=not args.no_mic, device_id=args.device)
+
+    def on_exit() -> None:
+        logger.info("Shutting down VoxPilot...")
+        engine.stop()
+
+    tray = VoxPilotTrayIcon(engine=engine, on_exit=on_exit)
+    tray.show()
+
+    # Periodic timer to allow Python signal handling (Ctrl+C) in Qt event loop
+    timer = QtCore.QTimer()
+    timer.timeout.connect(lambda: None)
+    timer.start(500)
+
+    def signal_handler(*_: Any) -> None:
+        logger.info("Termination signal received. Exiting...")
+        on_exit()
+        app.quit()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    try:
+        signal.signal(signal.SIGTERM, signal_handler)
+    except Exception:
+        pass
+
+    logger.info("VoxPilot is active and running in the system tray. Press Ctrl+C or right-click the tray icon to exit.")
+    if QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+        tray.showMessage(
+            "VoxPilot Voice Control",
+            "VoxPilot is running and listening. Say 'show numbers' or right-click for options.",
+            QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
+
+    return app.exec()
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())
+

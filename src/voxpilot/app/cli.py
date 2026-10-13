@@ -158,6 +158,7 @@ def main() -> int:
     subparsers.add_parser("list-commands", help="List all voice commands")
     subparsers.add_parser("dump-ui", help="Dump UI elements of foreground window")
     subparsers.add_parser("calibrate", help="Run acoustic calibration wizard")
+    subparsers.add_parser("run", help="Launch VoxPilot system tray application")
 
     say_parser = subparsers.add_parser("say", help="Simulate a spoken voice command")
     say_parser.add_argument("phrase", type=str, help="Utterance to simulate")
@@ -174,6 +175,9 @@ def main() -> int:
         return run_dump_ui()
     elif args.command == "calibrate":
         return run_calibrate()
+    elif args.command == "run":
+        from .tray import main as tray_main
+        return tray_main()
     else:
         parser.print_help()
         return 0

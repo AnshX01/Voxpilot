@@ -102,3 +102,15 @@ def test_cli_diagnostics_and_commands() -> None:
     assert run_say("unknown gibberish wordxyz") == 1  # Unrecognized phrase exits with 1
     assert run_list_commands() == 0
     assert run_dump_ui() == 0
+
+
+def test_tray_main_lifecycle(monkeypatch) -> None:
+    from voxpilot.app.tray import main as tray_main
+    from PySide6 import QtWidgets
+
+    monkeypatch.setattr(QtWidgets.QApplication, "exec", lambda self: 0)
+    monkeypatch.setattr("sys.argv", ["voxpilot", "--no-mic"])
+
+    exit_code = tray_main()
+    assert exit_code == 0
+
