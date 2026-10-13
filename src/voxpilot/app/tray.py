@@ -73,9 +73,9 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
     )
 
     _MENU_QSS = """
-    QMenu { background: rgba(244,240,236,245); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
-            padding: 8px 6px; icon-size: 26px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
-    QMenu::item { padding: 6px 26px 6px 10px; border-radius: 6px; margin: 1px 4px; }
+    QMenu { background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(247,243,238,247), stop:1 rgba(226,219,212,247)); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
+            padding: 8px 6px; icon-size: 30px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
+    QMenu::item { padding: 3px 26px 3px 8px; border-radius: 6px; margin: 1px 6px; }
     QMenu::item:selected { background: rgba(10,132,255,255); color: white; }
     QMenu::item:disabled { color: #8e8a86; }
     QMenu::separator { height: 1px; background: rgba(0,0,0,30); margin: 6px 14px; }
@@ -86,7 +86,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
     def _add_header(menu, text: str, title: bool = False):
         label = QtWidgets.QLabel(text)
         label.setStyleSheet(
-            "padding: 6px 14px 3px 14px; background: transparent; font-size: 10.5pt; "
+            "padding: 4px 14px 2px 14px; background: transparent; font-size: 10.5pt; "
             + ("font-weight: 700; font-size: 11pt; color: #1d1d1f;" if title else "font-weight: 600; color: #8a8681;")
         )
         wa = QtWidgets.QWidgetAction(menu)

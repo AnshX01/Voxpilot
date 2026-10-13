@@ -150,6 +150,49 @@ def run_calibrate() -> int:
     return 0
 
 
+def run_mic_test(seconds: int, device, report_path: str = "voxpilot-mic-test.txt") -> int:
+    """Record from the real microphone and show what the recognizer hears (writes voxpilot-mic-test.txt)."""
+    import time
+    import numpy as np
+    from ..contracts.dto import TranscriptEvent
+    from ..speech.audio_capture import LiveAudioCapture
+    from ..speech.vosk_engine import VoskSpeechEngine
+
+    lines = []
+
+    def say(msg: str) -> None:
+        print(msg)
+        lines.append(msg)
+
+    engine = VoskSpeechEngine()
+    engine.set_open_vocabulary(True)
+    engine.subscribe(lambda ev: say(("FINAL   : " if ev.is_final else "partial : ") + ev.text) if ev.text else None)
+    engine.start()
+    cap = LiveAudioCapture()
+    cap.start(device_id=device)
+    say(f"Input device index: {cap.device_id}, native rate: {cap.native_samplerate}, channels: {cap.native_channels}")
+    say(f"Speak normally for {seconds} seconds...")
+    t_end, peak, sq, n, dropped0 = time.time() + seconds, 0.0, 0.0, 0, 0
+    while time.time() < t_end:
+        chunk = cap.read_chunk(timeout=0.2)
+        if not chunk:
+            continue
+        a = np.frombuffer(chunk.data, dtype=np.int16).astype(np.float32) / 32768.0
+        if a.size:
+            peak = max(peak, float(np.abs(a).max()))
+            sq += float((a * a).sum())
+            n += a.size
+        engine.process_audio(chunk)
+    engine.flush()
+    cap.stop()
+    rms = (sq / n) ** 0.5 if n else 0.0
+    say(f"Peak level: {peak:.3f}  RMS: {rms:.4f}  (peak below 0.02 = mic too quiet or wrong device)")
+    with open(report_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print(f"Saved {report_path}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="VoxPilot Voice Control CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -160,6 +203,10 @@ def main() -> int:
     subparsers.add_parser("calibrate", help="Run acoustic calibration wizard")
     subparsers.add_parser("run", help="Launch VoxPilot system tray application")
 
+    mic_parser = subparsers.add_parser("mic-test", help="Record from the microphone and show what is recognized")
+    mic_parser.add_argument("--seconds", type=int, default=10)
+    mic_parser.add_argument("--device", type=int, default=None)
+
     say_parser = subparsers.add_parser("say", help="Simulate a spoken voice command")
     say_parser.add_argument("phrase", type=str, help="Utterance to simulate")
 
@@ -167,6 +214,8 @@ def main() -> int:
 
     if args.command == "doctor":
         return run_doctor()
+    elif args.command == "mic-test":
+        return run_mic_test(args.seconds, args.device)
     elif args.command == "say":
         return run_say(args.phrase)
     elif args.command == "list-commands":

@@ -275,3 +275,28 @@ def test_stop_drops_queued_and_cleans_after_inflight(engine) -> None:
         time.sleep(0.05)
     assert handled == ["one"]             # queued utterance never ran after stop
     assert cleaned.count("hide") >= 2     # stop() cleanup plus post-in-flight cleanup
+
+
+def test_mic_test_command_reports_levels(tmp_path, monkeypatch, capsys) -> None:
+    """`mic-test` runs end to end against a fake capture device and writes its report."""
+    import numpy as np
+    from voxpilot.app import cli
+    from voxpilot.contracts.dto import AudioChunk
+    import voxpilot.speech.audio_capture as ac
+
+    class FakeCap:
+        device_id, native_samplerate, native_channels = 3, 48000, 1
+        def __init__(self): self.n = 0
+        def start(self, device_id=None): pass
+        def stop(self): pass
+        def read_chunk(self, timeout=0.2):
+            self.n += 1
+            t = np.arange(800) / 16000.0
+            pcm = (0.3 * np.sin(2 * np.pi * 440 * t) * 32767).astype(np.int16)
+            return AudioChunk(data=pcm.tobytes())
+
+    monkeypatch.setattr(ac, "LiveAudioCapture", FakeCap)
+    assert cli.run_mic_test(1, None, str(tmp_path / "voxpilot-mic-test.txt")) == 0
+    out = capsys.readouterr().out
+    assert "Peak level: 0.3" in out
+    assert (tmp_path / "voxpilot-mic-test.txt").exists()
