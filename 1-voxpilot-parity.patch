@@ -1,0 +1,2026 @@
+diff --git a/scripts/windows_verify_parity.ps1 b/scripts/windows_verify_parity.ps1
+new file mode 100644
+index 0000000..04b033b
+--- /dev/null
++++ b/scripts/windows_verify_parity.ps1
+@@ -0,0 +1,13 @@
++# One-shot Windows check for the Voice Control parity branch (UNTESTED on Windows by the author).
++# Usage (PowerShell, from repo root):  powershell -ExecutionPolicy Bypass -File scripts\windows_verify_parity.ps1
++$ErrorActionPreference = "Stop"
++python -m venv .venv
++.\.venv\Scripts\python -m pip install --quiet pytest numpy PySide6 psutil vosk uiautomation comtypes sounddevice faster-whisper
++if (-not (Test-Path models\vosk-model-small-en-us-0.15)) {
++  Invoke-WebRequest https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip -OutFile m.zip
++  Expand-Archive m.zip models; Remove-Item m.zip
++}
++$env:PYTHONPATH = "src"
++.\.venv\Scripts\python -m pytest -q tests 2>&1 | Tee-Object -FilePath verify_log.txt
++Write-Host "`nTest log saved to verify_log.txt. Launching VoxPilot: try 'show numbers', 'show grid', 'show text numbers', 'show commands'."
++.\.venv\Scripts\python -m voxpilot.app.tray
+diff --git a/src/VoxPilot.Contracts/dto.py b/src/VoxPilot.Contracts/dto.py
+index d487957..c3018e1 100644
+--- a/src/VoxPilot.Contracts/dto.py
++++ b/src/VoxPilot.Contracts/dto.py
+@@ -19,6 +19,8 @@ class EngineMode(str, Enum):
+ 
+     COMMAND = "command"
+     DICTATION = "dictation"
++    SPELLING = "spelling"
++    SWIFT = "swift"
+     SLEEP = "sleep"
+     PAUSED = "paused"
+ 
+@@ -56,6 +58,7 @@ class OverlayMode(str, Enum):
+     NAMES = "names"
+     GRID = "grid"
+     DISAMBIGUATION = "disambiguation"
++    TEXT_NUMBERS = "text_numbers"
+ 
+ 
+ class ActionType(str, Enum):
+diff --git a/src/voxpilot/app/command_catalog.py b/src/voxpilot/app/command_catalog.py
+new file mode 100644
+index 0000000..4abc816
+--- /dev/null
++++ b/src/voxpilot/app/command_catalog.py
+@@ -0,0 +1,47 @@
++"""Command list shown by "Show commands" and the Commands window.
++
++Content comes from the Apple guide (mh40719) command examples, limited to
++commands this app implements. Lists vary by context like Apple's
++("when writing a document, you see text formatting commands").
++"""
++from __future__ import annotations
++
++from typing import Dict, List, Tuple
++
++CATALOG: Dict[str, List[Tuple[str, str]]] = {
++    "Basic navigation": [
++        ("Open <app name>", "Open an app, e.g. Open Mail"),
++        ("Scroll up / Scroll down", "Scroll the active window"),
++        ("Click <item name or number>", "Click an item, e.g. Click Done"),
++        ("Move cursor <direction> <n> pixels", "e.g. Move cursor right 5 pixels"),
++        ("Stop listening / Start listening", "Pause or resume Voice Control"),
++        ("Show commands", "List available commands"),
++    ],
++    "Overlays": [
++        ("Show names / Hide names", "Label items with their names"),
++        ("Show numbers / Hide numbers", "Label items with numbers"),
++        ("Show text numbers / Hide text numbers", "Number lines, words and characters in text"),
++        ("Show grid / Hide grid", "Numbered screen grid"),
++        ("Show window grid", "Grid over the active window only"),
++        ("Drag <item> to <location>", "Drag and drop using names or numbers"),
++    ],
++    "Modes": [
++        ("Dictation mode", "Words that aren't commands are entered as text (default)"),
++        ("Spelling mode", "Enter text character by character; phonetic code words work"),
++        ("Command mode", "Respond only to commands"),
++        ("Swift mode", "Write Swift code by speaking it"),
++    ],
++    "Text editing": [
++        ("Replace <old> with <new>", "e.g. Replace cat with dog"),
++        ("Delete <n> / Uppercase <n>", "Act on a numbered line, word or character"),
++        ("Select <n>", "Select a numbered text item"),
++        ("Scratch that", "Undo the last dictated text"),
++        ("Select all / Copy that / Cut that / Paste that", "Clipboard and selection"),
++    ],
++}
++
++
++def commands_for_context(ctx: str) -> List[Tuple[str, str, str]]:
++    """Return (category, phrase, description) rows; text-editing first when typing."""
++    order = ["Text editing", "Modes", "Overlays", "Basic navigation"] if ctx == "text" else list(CATALOG)
++    return [(cat, phrase, desc) for cat in order for phrase, desc in CATALOG[cat]]
+diff --git a/src/voxpilot/app/commands_window.py b/src/voxpilot/app/commands_window.py
+new file mode 100644
+index 0000000..5bc9b83
+--- /dev/null
++++ b/src/voxpilot/app/commands_window.py
+@@ -0,0 +1,74 @@
++"""Voice Control Commands window and interactive tutorial (Qt)."""
++from __future__ import annotations
++
++from PySide6 import QtCore, QtWidgets
++
++from .command_catalog import commands_for_context
++
++TUTORIAL_STEPS = [
++    ("Say \"Show numbers\" to label what's on screen.", "SHOW_NUMBERS"),
++    ("Say \"Hide numbers\" to remove the labels.", "HIDE_NUMBERS"),
++    ("Say \"Show grid\" to overlay a numbered grid.", "SHOW_GRID"),
++    ("Say \"Hide grid\".", "HIDE_GRID"),
++    ("Say \"Scroll down\".", "SCROLL"),
++    ("Say \"Stop listening\" when you want to pause.", "GO_TO_SLEEP"),
++]
++
++
++class CommandsWindow(QtWidgets.QWidget):
++    def __init__(self, engine, parent=None) -> None:
++        super().__init__(parent)
++        self.setWindowTitle("Voice Control Commands")
++        self.resize(900, 560)
++        lay = QtWidgets.QVBoxLayout(self)
++        self.tree = QtWidgets.QTreeWidget()
++        self.tree.setHeaderLabels(["Command", "What it does"])
++        lay.addWidget(self.tree)
++        btn = QtWidgets.QPushButton("Open Tutorial")
++        btn.clicked.connect(lambda: Tutorial(engine, self).show())
++        lay.addWidget(btn)
++        ctx = "text" if engine.mode.value in ("dictation", "spelling", "swift") else "general"
++        cats = {}
++        for cat, phrase, desc in commands_for_context(ctx):
++            top = cats.get(cat)
++            if top is None:
++                top = QtWidgets.QTreeWidgetItem([cat])
++                self.tree.addTopLevelItem(top)
++                cats[cat] = top
++            top.addChild(QtWidgets.QTreeWidgetItem([phrase, desc]))
++        self.tree.expandAll()
++        self.tree.setWordWrap(True)
++        self.tree.setTextElideMode(QtCore.Qt.ElideNone)
++        self.tree.header().setStretchLastSection(True)
++        self.tree.resizeColumnToContents(0)
++        self.tree.setColumnWidth(0, max(self.tree.columnWidth(0), 330))
++
++
++class Tutorial(QtWidgets.QDialog):
++    """Interactive practice: advances when the engine reports the expected command."""
++
++    def __init__(self, engine, parent=None) -> None:
++        super().__init__(parent)
++        self.setWindowTitle("Voice Control Tutorial")
++        self.engine = engine
++        self.step = 0
++        self.setMinimumSize(420, 140)
++        self.label = QtWidgets.QLabel()
++        self.label.setWordWrap(True)
++        lay = QtWidgets.QVBoxLayout(self)
++        lay.addWidget(self.label)
++        self._render()
++        engine.result_listeners = getattr(engine, "result_listeners", [])
++        engine.result_listeners.append(self._on_result)
++
++    def _render(self) -> None:
++        if self.step >= len(TUTORIAL_STEPS):
++            self.label.setText("You're done. Say \"Show commands\" any time to see what you can say.")
++        else:
++            self.label.setText(f"Step {self.step + 1} of {len(TUTORIAL_STEPS)}\n\n{TUTORIAL_STEPS[self.step][0]}")
++
++    def _on_result(self, res) -> None:
++        name = getattr(getattr(res, "matched_intent", None), "name", None)
++        if self.step < len(TUTORIAL_STEPS) and name == TUTORIAL_STEPS[self.step][1]:
++            self.step += 1
++            self._render()
+diff --git a/src/voxpilot/app/tray.py b/src/voxpilot/app/tray.py
+index ad1e4a8..d50efc7 100644
+--- a/src/voxpilot/app/tray.py
++++ b/src/voxpilot/app/tray.py
+@@ -63,61 +63,142 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+         self.setIcon(QtGui.QIcon(pixmap))
+         self.setToolTip("VoxPilot Voice Control (Active)")
+ 
++    # Apple Voice Control menu (guide screenshot): Voice Control / Stop Listening, Start Listening /
++    # Mode: Dictation, Command, Spelling, Swift / Language: English / Microphone / Voice Control Settings...
++    MODES = (
++        ("Dictation Mode", EngineMode.DICTATION),
++        ("Command Mode", EngineMode.COMMAND),
++        ("Spelling Mode", EngineMode.SPELLING),
++        ("Swift Mode", EngineMode.SWIFT),
++    )
++
+     def _create_menu(self) -> None:
+-        """Build right-click context menu."""
+         menu = QtWidgets.QMenu()
+-
+-        # Status item
+-        self.status_action = menu.addAction("Status: Listening")
+-        self.status_action.setEnabled(False)
++        self._menu = menu  # keep the Python wrapper alive; setContextMenu doesn't take ownership
++        title = menu.addAction("Voice Control")
++        title.setEnabled(False)
+         menu.addSeparator()
+-
+-        # Mode toggles
+-        self.listening_action = menu.addAction("Sleep (Stop Listening)")
+-        self.listening_action.triggered.connect(self._toggle_listening)
+-
+-        self.dictation_action = menu.addAction("Switch to Dictation Mode")
+-        self.dictation_action.triggered.connect(self._toggle_dictation)
+-
++        self.stop_action = menu.addAction("Stop Listening")
++        self.stop_action.triggered.connect(self._stop_listening)
++        self.start_action = menu.addAction("Start Listening")
++        self.start_action.triggered.connect(self._start_listening)
++        self.start_action.setEnabled(False)
+         menu.addSeparator()
+-
+-        # Overlay toggles
+-        self.numbers_action = menu.addAction("Show Numbers")
+-        self.numbers_action.triggered.connect(self._toggle_numbers)
+-
+-        self.grid_action = menu.addAction("Show Grid")
+-        self.grid_action.triggered.connect(self._toggle_grid)
+-
++        menu.addSection("Mode")
++        self.mode_group = QtGui.QActionGroup(menu)
++        self.mode_actions = {}
++        for label, mode in self.MODES:
++            act = menu.addAction(label)
++            act.setCheckable(True)
++            act.setActionGroup(self.mode_group)
++            act.triggered.connect(lambda _=False, m=mode: self._set_mode(m))
++            self.mode_actions[mode] = act
++        self.mode_actions[EngineMode.DICTATION].setChecked(True)
+         menu.addSeparator()
+-
+-        # Exit action
+-        exit_action = menu.addAction("Exit VoxPilot")
++        menu.addSection("Language")
++        lang = menu.addAction("English")
++        lang.setCheckable(True)
++        lang.setChecked(True)
++        menu.addSeparator()
++        menu.addSection("Microphone")
++        self.mic_group = QtGui.QActionGroup(menu)
++        self.mic_group.setExclusive(True)
++        self.mic_action = menu.addAction("Automatic (default microphone)")
++        self.mic_action.setCheckable(True)
++        self.mic_action.setChecked(True)
++        self.mic_action.triggered.connect(lambda _=False: self._select_microphone(None))
++        self.mic_group.addAction(self.mic_action)
++        self._mic_actions = []
++        self._selected_mic = None
++        menu.aboutToShow.connect(self.refresh_microphones)
++        self._mic_anchor = menu.addSeparator()
++        self.settings_action = menu.addAction("Voice Control Settings...")
++        self.settings_action.triggered.connect(self._open_commands_window)
++        menu.addSeparator()
++        exit_action = menu.addAction("Quit VoxPilot")
+         exit_action.triggered.connect(self._handle_exit)
+-
++        # kept for API compatibility (not shown in the Apple-style menu)
++        self.status_action = QtGui.QAction("Status: Listening", self)
++        self.listening_action = self.stop_action
++        self.dictation_action = self.mode_actions[EngineMode.DICTATION]
++        self.numbers_action = QtGui.QAction("Show Numbers", self)
++        self.grid_action = QtGui.QAction("Show Grid", self)
+         self.setContextMenu(menu)
+ 
++    def _set_mode(self, mode: EngineMode) -> None:
++        self.engine.mode = mode
++        self.mode_actions[mode].setChecked(True)
++        self.engine.overlay_service.update_hud(mode=mode, text=dict((m, l) for l, m in self.MODES)[mode])
++
++    @staticmethod
++    def list_input_devices() -> list:
++        """Return [(device_index, name)] of distinct input devices (empty if unavailable)."""
++        try:
++            import sounddevice as sd
++            seen, out = set(), []
++            for idx, dev in enumerate(sd.query_devices()):
++                name = str(dev.get("name", "")).strip()
++                if dev.get("max_input_channels", 0) > 0 and name and name not in seen:
++                    seen.add(name)
++                    out.append((idx, name))
++            return out
++        except Exception:
++            return []
++
++    def refresh_microphones(self) -> None:
++        menu = self._menu
++        for act in self._mic_actions:
++            menu.removeAction(act)
++            self.mic_group.removeAction(act)
++        self._mic_actions = []
++        for idx, name in self.list_input_devices():
++            act = QtGui.QAction(name, menu)
++            act.setCheckable(True)
++            act.setChecked(self._selected_mic == idx)
++            act.triggered.connect(lambda _=False, i=idx: self._select_microphone(i))
++            self.mic_group.addAction(act)
++            menu.insertAction(self._mic_anchor, act)
++            self._mic_actions.append(act)
++        self.mic_action.setChecked(self._selected_mic is None)
++
++    def _select_microphone(self, device_id) -> None:
++        self._selected_mic = device_id
++        try:
++            self.engine.stop_live_capture()
++            self.engine.start_live_capture(device_id=device_id)
++        except Exception:
++            pass
++
++    def _stop_listening(self) -> None:
++        self._prior_mode = self.engine.mode
++        self.engine.mode = EngineMode.SLEEP
++        self.stop_action.setEnabled(False)
++        self.start_action.setEnabled(True)
++        self.engine.overlay_service.hide_all()
++        self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Stop listening")
++
++    def _start_listening(self) -> None:
++        self.engine.mode = getattr(self, "_prior_mode", EngineMode.DICTATION)
++        if self.engine.mode == EngineMode.SLEEP:
++            self.engine.mode = EngineMode.DICTATION
++        self.stop_action.setEnabled(True)
++        self.start_action.setEnabled(False)
++        self.mode_actions.get(self.engine.mode, self.mode_actions[EngineMode.DICTATION]).setChecked(True)
++        self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Start listening")
++
++    def _open_commands_window(self) -> None:
++        from .commands_window import CommandsWindow
++        self._cmd_window = CommandsWindow(self.engine)
++        self._cmd_window.show()
++
+     def _toggle_listening(self) -> None:
+         if self.engine.mode == EngineMode.SLEEP:
+-            self.engine.mode = EngineMode.COMMAND
+-            self.listening_action.setText("Sleep (Stop Listening)")
+-            self.status_action.setText("Status: Listening")
+-            self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Listening")
++            self._start_listening()
+         else:
+-            self.engine.mode = EngineMode.SLEEP
+-            self.listening_action.setText("Wake Up (Start Listening)")
+-            self.status_action.setText("Status: Sleeping")
+-            self.engine.overlay_service.hide_all()
+-            self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Sleeping")
++            self._stop_listening()
+ 
+     def _toggle_dictation(self) -> None:
+-        if self.engine.mode == EngineMode.DICTATION:
+-            self.engine.mode = EngineMode.COMMAND
+-            self.dictation_action.setText("Switch to Dictation Mode")
+-            self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Command Mode")
+-        else:
+-            self.engine.mode = EngineMode.DICTATION
+-            self.dictation_action.setText("Switch to Command Mode")
+-            self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Dictation Mode")
++        self._set_mode(EngineMode.COMMAND if self.engine.mode == EngineMode.DICTATION else EngineMode.DICTATION)
+ 
+     def _toggle_numbers(self) -> None:
+         if self.engine.overlay_service.is_numbers_visible():
+diff --git a/src/voxpilot/automation/text_target.py b/src/voxpilot/automation/text_target.py
+new file mode 100644
+index 0000000..9ca0095
+--- /dev/null
++++ b/src/voxpilot/automation/text_target.py
+@@ -0,0 +1,85 @@
++"""Focused text control access for Voice Control text numbers (Windows UIA).
++
++API usage checked against uiautomation 2.0.29 source (TextRange.Move /
++MoveEndpointByRange / MoveEndpointByUnit / Select / GetBoundingRectangles,
++TextUnit.Character = 0, TextPatternRangeEndpoint.Start/End = 0/1).
++Windows only; elsewhere every call fails soft. NOT run against a real
++Windows control in this build.
++"""
++from __future__ import annotations
++
++from typing import List, Optional, Tuple
++
++_CHAR = 0     # uiautomation.TextUnit.Character
++_START = 0    # TextPatternRangeEndpoint.Start
++_END = 1      # TextPatternRangeEndpoint.End
++
++
++class FocusedTextTarget:
++    def _focused(self):
++        try:
++            import uiautomation as auto
++            return auto.GetFocusedControl()
++        except Exception:
++            return None
++
++    @staticmethod
++    def _text_pattern(c):
++        if c is None:
++            return None
++        try:
++            import uiautomation as auto
++            return c.GetPattern(auto.PatternId.TextPattern)
++        except Exception:
++            return None
++
++    def get_text(self) -> str:
++        c = self._focused()
++        tp = self._text_pattern(c)
++        if tp is not None:
++            try:
++                return tp.DocumentRange.GetText(-1) or ""
++            except Exception:
++                pass
++        try:
++            return c.GetValuePattern().Value or ""
++        except Exception:
++            return ""
++
++    @staticmethod
++    def _range(tp, start: int, end: int):
++        rng = tp.DocumentRange.Clone()
++        # collapse to document start, then move to [start, end)
++        rng.MoveEndpointByRange(_END, rng, _START)
++        if start:
++            rng.Move(_CHAR, start)
++        rng.MoveEndpointByUnit(_END, _CHAR, max(0, end - start))
++        return rng
++
++    def select_range(self, start: int, end: int) -> bool:
++        tp = self._text_pattern(self._focused())
++        if tp is None:
++            return False
++        try:
++            return bool(self._range(tp, start, end).Select())
++        except Exception:
++            return False
++
++    def get_selection(self) -> Tuple[int, int]:
++        return (0, 0)
++
++    def item_rects(self, items) -> List[Optional[Tuple[int, int, int, int]]]:
++        """Screen (x, y, w, h) of each item's first visible line fragment."""
++        tp = self._text_pattern(self._focused())
++        out: List[Optional[Tuple[int, int, int, int]]] = []
++        for it in items:
++            rect = None
++            try:
++                rs = self._range(tp, it.start, it.end).GetBoundingRectangles()
++                if rs:
++                    r = rs[0]
++                    rect = (r.left, r.top, r.width(), r.height())
++            except Exception:
++                rect = None
++            out.append(rect)
++        return out
+diff --git a/src/voxpilot/commands/command_parser.py b/src/voxpilot/commands/command_parser.py
+index a8c47cc..0df99a9 100644
+--- a/src/voxpilot/commands/command_parser.py
++++ b/src/voxpilot/commands/command_parser.py
+@@ -18,6 +18,8 @@ class CommandParser:
+ 
+     def _init_builtins(self) -> None:
+         self.builtins: List[Dict[str, Any]] = [
++            {"intent": "SHOW_TEXT_NUMBERS", "patterns": [r"^show\s+text\s+numbers?$"]},
++            {"intent": "HIDE_TEXT_NUMBERS", "patterns": [r"^hide\s+text\s+numbers?$"]},
+             {"intent": "SHOW_NUMBERS", "patterns": [
+                 r"^(?:please\s+)?(?:show|display)\s+numbers?(?:\s+everywhere)?$",
+                 r"^(?:sure|shore|so)\s+numbers?$",
+@@ -41,6 +43,8 @@ class CommandParser:
+             {"intent": "UNMUTE", "patterns": [r"^unmute(?:\s+microphone)?$"]},
+             {"intent": "SWITCH_TO_COMMAND_MODE", "patterns": [r"^(?:switch\s+to\s+)?command\s+mode$", r"^stop\s+dictation$"]},
+             {"intent": "SWITCH_TO_DICTATION_MODE", "patterns": [r"^(?:switch\s+to\s+)?dictation\s+mode$", r"^start\s+dictation$", r"^dictate$"]},
++            {"intent": "SWITCH_TO_SPELLING_MODE", "patterns": [r"^(?:switch\s+to\s+)?spelling\s+mode$"]},
++            {"intent": "SWITCH_TO_SWIFT_MODE", "patterns": [r"^(?:switch\s+to\s+)?swift\s+mode$"]},
+             {"intent": "START_DICTATION", "patterns": [r"^start\s+dictation$", r"^dictate$", r"^dictation\s+mode$"]},
+             {"intent": "STOP_DICTATION", "patterns": [r"^stop\s+dictation$", r"^command\s+mode$"]},
+             {"intent": "PRESS_ENTER", "patterns": [r"^press\s+enter$", r"^hit\s+enter$", r"^enter$"]},
+@@ -238,7 +242,7 @@ class CommandParser:
+         if m_drill:
+             target_str = m_drill.group(1).strip()
+             num = self.normalize_number(target_str)
+-            if num is not None and 1 <= num <= 9:
++            if num is not None and 1 <= num <= 99:
+                 return Intent(name="DRILL_DOWN_GRID", confidence=0.98, slots={"cell": num}, raw_text=text)
+ 
+         # Check key repeat e.g. "press down 5 times", "press tab 3 times"
+diff --git a/src/voxpilot/contracts/dto.py b/src/voxpilot/contracts/dto.py
+index d487957..c3018e1 100644
+--- a/src/voxpilot/contracts/dto.py
++++ b/src/voxpilot/contracts/dto.py
+@@ -19,6 +19,8 @@ class EngineMode(str, Enum):
+ 
+     COMMAND = "command"
+     DICTATION = "dictation"
++    SPELLING = "spelling"
++    SWIFT = "swift"
+     SLEEP = "sleep"
+     PAUSED = "paused"
+ 
+@@ -56,6 +58,7 @@ class OverlayMode(str, Enum):
+     NAMES = "names"
+     GRID = "grid"
+     DISAMBIGUATION = "disambiguation"
++    TEXT_NUMBERS = "text_numbers"
+ 
+ 
+ class ActionType(str, Enum):
+diff --git a/src/voxpilot/dictation/dictation_service.py b/src/voxpilot/dictation/dictation_service.py
+index c369f71..e18e2c1 100644
+--- a/src/voxpilot/dictation/dictation_service.py
++++ b/src/voxpilot/dictation/dictation_service.py
+@@ -106,6 +106,8 @@ class DictationService(IDictationService):
+     def execute_editing_command(self, command: str) -> CommandResult:
+         """Execute spoken text editing directives (e.g. 'delete last word', 'select all')."""
+         last_len = self._history[-1].char_count if self._history else 0
++        if self._spelling_mode:
++            command = self.formatting_engine.phonetic_command(command)
+         result = self.editing_engine.execute_command(command, last_burst_len=last_len)
+         if result.status == CommandStatus.SUCCESS:
+             cmd_lower = command.lower().strip()
+diff --git a/src/voxpilot/dictation/formatting.py b/src/voxpilot/dictation/formatting.py
+index a256802..00536cc 100644
+--- a/src/voxpilot/dictation/formatting.py
++++ b/src/voxpilot/dictation/formatting.py
+@@ -16,6 +16,8 @@ from typing import Any, Optional
+ # NATO Phonetic Alphabet mapping
+ NATO_PHONETIC = {
+     "alpha": "a",
++    "alfa": "a",
++    "juliett": "j",
+     "bravo": "b",
+     "charlie": "c",
+     "delta": "d",
+@@ -220,6 +222,22 @@ class FormattingEngine:
+         self.all_caps_active: bool = False
+         self.sentence_start: bool = True
+ 
++    def phonetic_command(self, command: str) -> str:
++        """Spelling mode: "Replace Charlie Alfa Tango with Delta Oscar Golf" -> "replace cat with dog"."""
++        import re as _re
++        m = _re.match(r"^(replace|select)\s+(.+?)(?:\s+with\s+(.+))?$", command.strip(), _re.I)
++        if not m:
++            return command
++
++        def conv(part: str) -> str:
++            toks = part.lower().split()
++            if toks and all(t in NATO_PHONETIC for t in toks):
++                return "".join(NATO_PHONETIC[t] for t in toks)
++            return part
++
++        verb, a, b = m.group(1).lower(), conv(m.group(2)), m.group(3)
++        return f"{verb} {a} with {conv(b)}" if b else f"{verb} {a}"
++
+     def reset_state(self) -> None:
+         """Reset ongoing sentence and casing state."""
+         self.all_caps_active = False
+diff --git a/src/voxpilot/engine.py b/src/voxpilot/engine.py
+index 97e4815..7c02f45 100644
+--- a/src/voxpilot/engine.py
++++ b/src/voxpilot/engine.py
+@@ -26,6 +26,7 @@ from voxpilot.commands import CommandParser, NumberParser
+ from voxpilot.automation import UiaElementProvider
+ from voxpilot.overlay import OverlayService
+ from voxpilot.input import WindowsInputInjector
++from voxpilot.dictation.dictation_service import DictationService
+ 
+ user32 = ctypes.windll.user32
+ logger = logging.getLogger("VoxPilot")
+@@ -47,7 +48,19 @@ class VoxPilotEngine:
+         self.overlay_service = overlay_service or OverlayService()
+         self.input_injector = input_injector or WindowsInputInjector()
+ 
+-        self.mode = EngineMode.COMMAND
++        try:
++            from voxpilot.automation.context_service import ContextService
++            _ctx = ContextService()
++        except Exception:
++            _ctx = None
++        self.dictation_service = DictationService(self.input_injector, context_service=_ctx)
++        from voxpilot.textnav import TextNumbering, SwiftFormatter
++        from voxpilot.automation.text_target import FocusedTextTarget
++        self.text_numbering = TextNumbering(FocusedTextTarget())
++        self.swift_formatter = SwiftFormatter()
++        self._mode = EngineMode.DICTATION
++        # Voice Control starts in Dictation mode (Apple guide: "Dictation mode is on by default").
++        self.mode = EngineMode.DICTATION
+         self.is_running = False
+         self._last_result: Optional[CommandResult] = None
+         self._history: List[CommandResult] = []
+@@ -123,25 +136,119 @@ class VoxPilotEngine:
+ 
+         logger.info(f"Final transcript: '{text}' in mode {self.mode}")
+ 
+-        if self.mode == EngineMode.DICTATION:
+-            # Check if user spoke a mode-switching or wake/sleep command
+-            intent = self.command_parser.parse(text)
+-            if intent and intent.name in ("SWITCH_TO_COMMAND_MODE", "STOP_DICTATION", "GO_TO_SLEEP", "WAKE_UP"):
+-                self.dispatch_intent(intent)
+-                return
+-
+-            # Otherwise, type the dictated text with natural spacing
+-            self.input_injector.type_text(text + " ")
+-            self.overlay_service.update_hud(mode=self.mode, text=f"Typed: {text}")
++        if self.mode in (EngineMode.DICTATION, EngineMode.SPELLING, EngineMode.SWIFT):
++            self._handle_text_entry(text)
+             return
+ 
+         # In COMMAND Mode:
++        tres = self._try_text_number_command(text)
++        if tres is not None:
++            self._record_result(tres)
++            return
+         res = self.process_text_command(text)
+         # If it was casual conversation (NO_MATCH), take zero action and do not pop up errors
+         if res.status == CommandStatus.NO_MATCH:
+             logger.debug(f"Filtered non-command utterance: '{text}'")
+             return
+ 
++    _TEXT_OPS = r"(delete|uppercase|lowercase|capitalize|select)"
++
++    @property
++    def mode(self) -> EngineMode:
++        return self._mode
++
++    @mode.setter
++    def mode(self, value: EngineMode) -> None:
++        self._mode = value
++        se = getattr(self, "speech_engine", None)
++        setter = getattr(se, "set_open_vocabulary", None)
++        if setter:
++            try:
++                setter(value in (EngineMode.DICTATION, EngineMode.SPELLING, EngineMode.SWIFT))
++            except Exception:  # pragma: no cover
++                logger.exception("could not switch recognizer vocabulary")
++
++    def _handle_show_text_numbers(self, intent: Intent) -> CommandResult:
++        items = self.text_numbering.show()
++        if not items:
++            self.text_numbering.hide()
++            return CommandResult.error(exception=RuntimeError("no text input area focused"),
++                                       message="No text input area with text to number")
++        self._paint_text_numbers()
++        return CommandResult.success(intent=intent, message=f"Text numbers shown ({len(items)})")
++
++    def _paint_text_numbers(self) -> None:
++        show = getattr(self.overlay_service, "show_text_numbers", None)
++        if not show:
++            return
++        from dataclasses import replace
++        rects = getattr(self.text_numbering.target, "item_rects", None)
++        items = self.text_numbering.items
++        if rects:
++            try:
++                rs = rects(items)
++                items = [replace(it, rect=r) for it, r in zip(items, rs)]
++            except Exception:
++                pass
++        show(items)
++
++    def _try_text_number_command(self, text: str) -> Optional[CommandResult]:
++        """'<delete|uppercase|lowercase|capitalize|select> <n>' while text numbers are shown."""
++        import re
++        from voxpilot.commands.number_parser import NumberParser
++        if not self.text_numbering.visible:
++            return None
++        m = re.match(r"^" + self._TEXT_OPS + r"\s+(.+)$", text.strip().lower())
++        if not m:
++            return None
++        n = NumberParser.parse_number_phrase(m.group(2))
++        if n is None:
++            return None
++        op = m.group(1)
++        tn = self.text_numbering
++        if op == "select":
++            ok = tn.select(n)
++        else:
++            it = tn.get(n)
++            ok = bool(it) and tn.apply(op, n)
++            if ok:
++                new = tn.transform(op, it.text)
++                if op == "delete":
++                    self.input_injector.key_press("delete")
++                else:
++                    self.input_injector.type_unicode(new)
++                tn.level = "line"
++                tn.refresh()
++        if not ok:
++            return CommandResult.error(exception=ValueError(f"no text item {n}"), message=f"No text item {n}")
++        self._paint_text_numbers()
++        return CommandResult.success(message=f"{op} {n}")
++
++    def _handle_text_entry(self, text: str) -> None:
++        res = self._try_text_number_command(text)
++        if res is not None:
++            self._record_result(res)
++            return
++        """Dictation/Spelling/Swift: commands win, anything else is entered as text."""
++        svc = self.dictation_service
++        svc.set_active(True)
++        svc.set_spelling_mode(self.mode == EngineMode.SPELLING)
++        if svc.editing_engine.is_editing_command(text):
++            svc.execute_editing_command(text)
++            return
++        intent = self.command_parser.parse(text)
++        if intent:
++            self.process_text_command(text)
++            return
++        if self.mode == EngineMode.SWIFT:
++            if not svc.verify_focus_target():
++                return
++            code = self.swift_formatter.format(text)
++            if code:
++                self.input_injector.type_unicode(code)
++            return
++        svc.handle_burst(TranscriptEvent(text=text, is_final=True))
++
+     def dispatch_intent(self, intent: Intent) -> CommandResult:
+         name = intent.name
+ 
+@@ -149,7 +256,7 @@ class VoxPilotEngine:
+         if self.mode == EngineMode.SLEEP and name != "WAKE_UP":
+             return CommandResult.blocked(
+                 reason=BlockedReason.SECURE_DESKTOP,
+-                message="VoxPilot is asleep. Say 'wake up' to resume listening.",
++                message="Voice Control is paused. Say 'Start listening' to resume.",
+             )
+ 
+         if name == "SHOW_NUMBERS":
+@@ -210,6 +317,20 @@ class VoxPilotEngine:
+             self.mode = EngineMode.DICTATION
+             self.overlay_service.update_hud(mode=self.mode, text="Dictation Active")
+             return CommandResult.success(intent=intent, message="Switched to Dictation mode")
++        elif name == "SHOW_TEXT_NUMBERS":
++            return self._handle_show_text_numbers(intent)
++        elif name == "HIDE_TEXT_NUMBERS":
++            self.text_numbering.hide()
++            self.overlay_service.hide_text_numbers() if hasattr(self.overlay_service, "hide_text_numbers") else None
++            return CommandResult.success(intent=intent, message="Text numbers hidden")
++        elif name == "SWITCH_TO_SPELLING_MODE":
++            self.mode = EngineMode.SPELLING
++            self.overlay_service.update_hud(mode=self.mode, text="Spelling Mode Active")
++            return CommandResult.success(intent=intent, message="Switched to Spelling mode")
++        elif name == "SWITCH_TO_SWIFT_MODE":
++            self.mode = EngineMode.SWIFT
++            self.overlay_service.update_hud(mode=self.mode, text="Swift Mode Active")
++            return CommandResult.success(intent=intent, message="Switched to Swift mode")
+         elif name == "SHOW_GRID":
+             self.overlay_service.show_grid()
+             self.overlay_service.update_hud(mode=self.mode, text="Grid Visible")
+@@ -252,9 +373,12 @@ class VoxPilotEngine:
+             self.overlay_service.update_hud(mode=self.mode, text="Command Mode Active")
+             return CommandResult.success(intent=intent, message="Switched to Command mode")
+         elif name == "SHOW_COMMANDS":
+-            help_summary = "Voice Commands: show numbers, click <n>, double click <n>, triple click <n>, long press <n>, drag <n> to <m>, scroll down, dictation mode, sleep"
+-            self.overlay_service.show_hud(help_summary, duration_ms=5000)
+-            self.overlay_service.update_hud(mode=self.mode, text="Showing Commands")
++            from voxpilot.app.command_catalog import commands_for_context
++            ctx = "text" if self.mode in (EngineMode.DICTATION, EngineMode.SPELLING, EngineMode.SWIFT) else "general"
++            self.visible_commands = commands_for_context(ctx)
++            show = getattr(self.overlay_service, "show_commands_window", None)
++            if show:
++                show(self.visible_commands)
+             return CommandResult.success(intent=intent, message="Displayed voice commands")
+         elif name == "HIDE_COMMANDS":
+             self.overlay_service.hide()
+@@ -431,17 +555,28 @@ class VoxPilotEngine:
+                 matched_intent=intent,
+             )
+ 
+-        # Check if screen grid is active and number is 1-9
+-        if self.overlay_service.is_grid_visible() and 1 <= num <= 9:
+-            coords = self.overlay_service.get_grid_cell_center(num)
+-            if coords:
+-                self.input_injector.click_at(coords[0], coords[1], button, count)
+-                self.overlay_service.hide_grid()
+-                return CommandResult.success(
+-                    intent=intent,
+-                    message=f"Clicked grid cell {num}",
+-                    details={"x": coords[0], "y": coords[1]},
+-                )
++        # Screen grid active: a bare number drills in (or clicks when it can't drill further);
++        # "click <n>" etc. act at the cell centre and the grid then disappears (Apple guide).
++        if self.overlay_service.is_grid_visible():
++            cell_total = getattr(self.overlay_service, "grid_cell_count", lambda: 9)()
++            if not isinstance(cell_total, int):
++                cell_total = 9
++            if 1 <= num <= cell_total:
++                bare = (intent.raw_text or "").strip().lower().split()
++                is_bare = len(bare) <= 1 or bare[0] in ("grid",)
++                can = getattr(self.overlay_service, "can_drill_grid", lambda n: False)(num)
++                if is_bare and can and button == MouseButton.LEFT and count == 1:
++                    self.overlay_service.drill_down_grid(num)
++                    return CommandResult.success(intent=intent, message=f"Drilled into grid cell {num}")
++                coords = self.overlay_service.get_grid_cell_center(num)
++                if coords:
++                    self.input_injector.click_at(coords[0], coords[1], button, count)
++                    self.overlay_service.hide_grid()
++                    return CommandResult.success(
++                        intent=intent,
++                        message=f"Clicked grid cell {num}",
++                        details={"x": coords[0], "y": coords[1]},
++                    )
+ 
+         element = self.element_provider.get_element_by_id(num)
+         if not element:
+@@ -644,4 +779,9 @@ class VoxPilotEngine:
+ 
+     def _record_result(self, res: CommandResult) -> None:
+         self._last_result = res
++        for cb in list(getattr(self, "result_listeners", [])):
++            try:
++                cb(res)
++            except Exception:  # pragma: no cover
++                pass
+         self._history.append(res)
+diff --git a/src/voxpilot/overlay/grid_model.py b/src/voxpilot/overlay/grid_model.py
+new file mode 100644
+index 0000000..ebf17b6
+--- /dev/null
++++ b/src/voxpilot/overlay/grid_model.py
+@@ -0,0 +1,102 @@
++"""Numbered screen grid model matching Apple Voice Control's grid.
++
++Reference (Apple guide mh40719 screenshots): the full-screen grid is 7 columns
++by 4 rows (cells numbered 1-28 left-to-right, top-to-bottom, badge at the cell
++centre); saying a number drills into that cell and shows a 5 x 5 grid (1-25).
++When an area can't be drilled further the badges are no longer framed and
++saying a number performs the Click command. After any other command the grid
++disappears.
++
++Pure logic, no Qt, so it is testable on any platform.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import List, Optional, Tuple
++
++TOP_COLS, TOP_ROWS = 7, 4
++DRILL_COLS, DRILL_ROWS = 5, 5
++MIN_SUBCELL_PX = 56     # drilled grids are enlarged so 5x5 badges stay readable (inferred from Apple screenshot)
++MIN_DRILLABLE_PX = 20   # a cell smaller than this can't be drilled; its number then clicks
++
++
++@dataclass(frozen=True)
++class Rect:
++    x: int
++    y: int
++    w: int
++    h: int
++
++
++class GridModel:
++    def __init__(self, bounds: Rect) -> None:
++        self.stack: List[Tuple[Rect, int, int]] = [(bounds, TOP_COLS, TOP_ROWS)]
++        self.logical: List[Rect] = [bounds]  # un-enlarged screen area each level represents
++
++    @property
++    def bounds(self) -> Rect:
++        return self.stack[-1][0]
++
++    @property
++    def cols(self) -> int:
++        return self.stack[-1][1]
++
++    @property
++    def rows(self) -> int:
++        return self.stack[-1][2]
++
++    @property
++    def count(self) -> int:
++        return self.cols * self.rows
++
++    def cell_rect(self, n: int) -> Optional[Rect]:
++        if not 1 <= n <= self.count:
++            return None
++        b = self.bounds
++        r, c = divmod(n - 1, self.cols)
++        x0 = b.x + round(c * b.w / self.cols)
++        x1 = b.x + round((c + 1) * b.w / self.cols)
++        y0 = b.y + round(r * b.h / self.rows)
++        y1 = b.y + round((r + 1) * b.h / self.rows)
++        return Rect(x0, y0, x1 - x0, y1 - y0)
++
++    def center(self, n: int) -> Optional[Tuple[int, int]]:
++        cr = self.cell_rect(n)
++        return None if cr is None else (cr.x + cr.w // 2, cr.y + cr.h // 2)
++
++    def logical_cell(self, n: int) -> Optional[Rect]:
++        lb = self.logical[-1]
++        if not 1 <= n <= self.count:
++            return None
++        r, c = divmod(n - 1, self.cols)
++        return Rect(lb.x + round(c * lb.w / self.cols), lb.y + round(r * lb.h / self.rows),
++                    round(lb.w / self.cols), round(lb.h / self.rows))
++
++    def can_drill(self, n: int) -> bool:
++        lc = self.logical_cell(n)
++        return lc is not None and lc.w >= MIN_DRILLABLE_PX and lc.h >= MIN_DRILLABLE_PX
++
++    def drill(self, n: int) -> bool:
++        if not self.can_drill(n):
++            return False
++        cr = self.cell_rect(n)
++        root = self.stack[0][0]
++        w = max(cr.w, DRILL_COLS * MIN_SUBCELL_PX)
++        h = max(cr.h, DRILL_ROWS * MIN_SUBCELL_PX)
++        cx, cy = cr.x + cr.w / 2, cr.y + cr.h / 2
++        x = min(max(root.x, round(cx - w / 2)), root.x + root.w - w)
++        y = min(max(root.y, round(cy - h / 2)), root.y + root.h - h)
++        self.logical.append(self.logical_cell(n))
++        self.stack.append((Rect(x, y, w, h), DRILL_COLS, DRILL_ROWS))
++        return True
++
++    def undo(self) -> bool:
++        if len(self.stack) > 1:
++            self.stack.pop()
++            self.logical.pop()
++            return True
++        return False
++
++    def framed(self) -> bool:
++        """Badges are framed while numbers can still be drilled into."""
++        return self.can_drill(1)
+diff --git a/src/voxpilot/overlay/overlay_service.py b/src/voxpilot/overlay/overlay_service.py
+index 8f5533e..3befe74 100644
+--- a/src/voxpilot/overlay/overlay_service.py
++++ b/src/voxpilot/overlay/overlay_service.py
+@@ -16,7 +16,9 @@ from __future__ import annotations
+ 
+ import ctypes
+ import logging
++import atexit
+ import sys
++import weakref
+ import threading
+ import time
+ from typing import Dict, List, Optional
+@@ -32,6 +34,7 @@ from voxpilot.contracts.dto import (
+     ScreenRect,
+ )
+ from voxpilot.contracts.interfaces import IOverlayService
++from voxpilot.overlay.grid_model import GridModel, Rect
+ 
+ logger = logging.getLogger("voxpilot.overlay")
+ 
+@@ -59,7 +62,11 @@ class OverlayCanvas(QtWidgets.QWidget):
+         )
+         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+-        self.setGeometry(0, 0, 1920, 1080)
++        scr = QtWidgets.QApplication.primaryScreen()
++        g = scr.geometry() if scr is not None else QtCore.QRect(0, 0, 1920, 1080)
++        self.setGeometry(g)
++        self.grid_model: Optional[GridModel] = None
++        self.text_items: list = []  # (number, QRect) tuples for text numbers
+ 
+         self.mode: OverlayMode = OverlayMode.OFF
+         self.elements: List[LabeledElement] = []
+@@ -67,6 +74,7 @@ class OverlayCanvas(QtWidgets.QWidget):
+         self.grid_bounds: Optional[ScreenRect] = None
+         self.grid_history: List[ScreenRect] = []
+         self.grid_cells: int = 3
++        self.grid_badge_cache: dict = {}
+ 
+         # HUD State
+         self.hud_text: str = ""
+@@ -94,37 +102,74 @@ class OverlayCanvas(QtWidgets.QWidget):
+             | WS_EX_TOPMOST,
+         )
+ 
++    # Apple Voice Control badge look (from guide screenshots): warm dark grey
++    # rounded tag, bold white number, small pointer on the right edge.
++    BADGE_BG = QtGui.QColor(74, 70, 66, 238)
++    BADGE_EDGE = QtGui.QColor(255, 255, 255, 70)
++
+     def _render_badge_pixmap(
+         self,
+         text: str,
+-        bg_color: QtGui.QColor = QtGui.QColor(22, 24, 28, 235),
++        bg_color: QtGui.QColor = None,
+         text_color: QtGui.QColor = QtGui.QColor(255, 255, 255),
+-        border_color: QtGui.QColor = QtGui.QColor(255, 255, 255, 90),
++        border_color: QtGui.QColor = None,
++        pointer: bool = True,
+     ) -> QtGui.QPixmap:
+-        font = QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold)
++        bg_color = bg_color or self.BADGE_BG
++        border_color = border_color or self.BADGE_EDGE
++        font = QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold)
+         fm = QtGui.QFontMetrics(font)
+         text_w = fm.horizontalAdvance(text)
+-        w = max(24, text_w + 14)
+-        h = 20
+-        pix = QtGui.QPixmap(w, h)
++        body_w = max(26, text_w + 14)
++        tip = 7 if pointer else 0
++        h = 22
++        w = body_w + tip + 2
++        pix = QtGui.QPixmap(w, h + 2)
+         pix.fill(QtCore.Qt.transparent)
+         p = QtGui.QPainter(pix)
+         p.setRenderHint(QtGui.QPainter.Antialiasing)
+         p.setFont(font)
+-
+-        # Subtle drop shadow for crisp legibility over light and dark backgrounds
+-        p.setBrush(QtGui.QColor(0, 0, 0, 110))
++        path = QtGui.QPainterPath()
++        path.addRoundedRect(QtCore.QRectF(1, 1, body_w, h - 2), 6, 6)
++        if pointer:
++            tri = QtGui.QPainterPath()
++            tri.moveTo(body_w - 1, h / 2 - 5)
++            tri.lineTo(body_w + tip, h / 2)
++            tri.lineTo(body_w - 1, h / 2 + 5)
++            tri.closeSubpath()
++            path = path.united(tri)
++        p.setBrush(QtGui.QColor(0, 0, 0, 70))
+         p.setPen(QtCore.Qt.NoPen)
+-        p.drawRoundedRect(1, 2, w - 2, h - 2, 4, 4)
+-
+-        # Dark high-contrast badge background with 1px silver border
++        p.translate(0, 1.5)
++        p.drawPath(path)
++        p.translate(0, -1.5)
+         p.setBrush(bg_color)
+         p.setPen(QtGui.QPen(border_color, 1.0))
+-        p.drawRoundedRect(0, 0, w - 1, h - 2, 4, 4)
+-
+-        # Pure white text
++        p.drawPath(path)
+         p.setPen(text_color)
+-        p.drawText(0, 0, w, h - 2, QtCore.Qt.AlignCenter, text)
++        p.drawText(QtCore.QRect(1, 1, body_w, h - 2), QtCore.Qt.AlignCenter, text)
++        p.end()
++        return pix
++
++    def render_grid_badge(self, text: str, framed: bool) -> QtGui.QPixmap:
++        font = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold)
++        fm = QtGui.QFontMetrics(font)
++        w = max(30, fm.horizontalAdvance(text) + 16)
++        h = 30
++        pix = QtGui.QPixmap(w + 6, h + 6)
++        pix.fill(QtCore.Qt.transparent)
++        p = QtGui.QPainter(pix)
++        p.setRenderHint(QtGui.QPainter.Antialiasing)
++        p.setFont(font)
++        if framed:
++            p.setBrush(QtCore.Qt.NoBrush)
++            p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 120), 2.0))
++            p.drawRoundedRect(QtCore.QRectF(1, 1, w + 4, h + 4), 8, 8)
++        p.setBrush(self.BADGE_BG)
++        p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 70), 1.0))
++        p.drawRoundedRect(QtCore.QRectF(3, 3, w, h), 6, 6)
++        p.setPen(QtGui.QColor(255, 255, 255))
++        p.drawText(QtCore.QRect(3, 3, w, h), QtCore.Qt.AlignCenter, text)
+         p.end()
+         return pix
+ 
+@@ -143,6 +188,12 @@ class OverlayCanvas(QtWidgets.QWidget):
+ 
+     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+         painter = QtGui.QPainter(self)
++        try:
++            self._paint(painter)
++        finally:
++            painter.end()
++
++    def _paint(self, painter: QtGui.QPainter) -> None:
+         painter.setRenderHint(QtGui.QPainter.Antialiasing)
+ 
+         # 1. Number Badges Mode (Single-shot or Continuous)
+@@ -153,7 +204,7 @@ class OverlayCanvas(QtWidgets.QWidget):
+                 if not pix:
+                     pix = self._render_badge_pixmap(key)
+                     self.badge_cache[key] = pix
+-                painter.drawPixmap(el.rect.x, el.rect.y, pix)
++                painter.drawPixmap(max(0, el.rect.x - pix.width() + 4), el.rect.y, pix)
+ 
+         # 2. Name Badges Mode
+         elif self.mode == OverlayMode.NAMES:
+@@ -177,75 +228,83 @@ class OverlayCanvas(QtWidgets.QWidget):
+                     self.disambig_badge_cache[item.badge_label] = pix
+                 painter.drawPixmap(item.element.rect.x, item.element.rect.y, pix)
+ 
+-        # 4. Screen Grid Mode
+-        if self.mode == OverlayMode.GRID:
+-            bounds = self.grid_bounds or ScreenRect(0, 0, 1920, 1080)
+-            cell_w = bounds.width / 3.0
+-            cell_h = bounds.height / 3.0
+-
+-            pen = QtGui.QPen(QtGui.QColor(255, 50, 50, 190), 2.0)
+-            painter.setPen(pen)
+-            font = QtGui.QFont("Segoe UI", 16, QtGui.QFont.Bold)
+-            painter.setFont(font)
+-
+-            num = 1
+-            for row in range(3):
+-                for col in range(3):
+-                    rx = int(bounds.x + col * cell_w)
+-                    ry = int(bounds.y + row * cell_h)
+-                    rw = int(cell_w)
+-                    rh = int(cell_h)
+-                    painter.drawRect(rx, ry, rw, rh)
+-                    painter.drawText(rx + 12, ry + 32, str(num))
+-                    num += 1
+-
+-        # 5. Floating HUD Toast Pill (macOS-Style Centered at Screen Top)
+-        if self.hud_text or self.hud_mode:
+-            pill_w = 420
+-            pill_h = 36
+-            pill_x = max(20, (self.width() - pill_w) // 2)
+-            pill_y = 12
+-            hud_rect = QtCore.QRect(pill_x, pill_y, pill_w, pill_h)
+-
+-            # Drop shadow
+-            painter.setBrush(QtGui.QColor(0, 0, 0, 90))
++        # 4. Screen Grid Mode (Apple style: thin dark lines, centred framed badges)
++        if self.mode == OverlayMode.GRID and self.grid_model is not None:
++            gm = self.grid_model
++            b = gm.bounds
++            painter.setBrush(QtGui.QColor(0, 0, 0, 18))
+             painter.setPen(QtCore.Qt.NoPen)
+-            painter.drawRoundedRect(pill_x + 1, pill_y + 2, pill_w, pill_h, 18, 18)
++            painter.drawRect(b.x, b.y, b.w, b.h)
++            painter.setPen(QtGui.QPen(QtGui.QColor(40, 36, 32, 190), 1.0))
++            for c in range(gm.cols + 1):
++                x = b.x + round(c * b.w / gm.cols)
++                painter.drawLine(x, b.y, x, b.y + b.h)
++            for r in range(gm.rows + 1):
++                y = b.y + round(r * b.h / gm.rows)
++                painter.drawLine(b.x, y, b.x + b.w, y)
++            framed = gm.framed()
++            for n in range(1, gm.count + 1):
++                cx, cy = gm.center(n)
++                pix = self.grid_badge_cache.get((n, framed))
++                if pix is None:
++                    pix = self.render_grid_badge(str(n), framed)
++                    self.grid_badge_cache[(n, framed)] = pix
++                painter.drawPixmap(cx - pix.width() // 2, cy - pix.height() // 2, pix)
++
++        # 4b. Text numbers (next to each line / word / character)
++        if self.mode == OverlayMode.TEXT_NUMBERS:
++            for num, qr in self.text_items:
++                key = str(num)
++                pix = self.badge_cache.get(key) or self._render_badge_pixmap(key)
++                self.badge_cache[key] = pix
++                painter.drawPixmap(max(0, qr.x() - pix.width() - 2), qr.y() + max(0, (qr.height() - pix.height()) // 2), pix)
++
++        # 5. Recognised-command pill (Apple: small light italic pill under the menu bar)
++        if self.hud_text:
++            font_msg = QtGui.QFont("Segoe UI", 10)
++            font_msg.setItalic(True)
++            painter.setFont(font_msg)
++            fm = QtGui.QFontMetrics(font_msg)
++            msg = self.hud_text[:48]
++            pw = fm.horizontalAdvance(msg) + 24
++            ph = 26
++            px = max(20, self.width() // 2 - pw - 60)
++            py = 44
++            painter.setBrush(QtGui.QColor(0, 0, 0, 50))
++            painter.setPen(QtCore.Qt.NoPen)
++            painter.drawRoundedRect(px, py + 2, pw, ph, 7, 7)
++            painter.setBrush(QtGui.QColor(236, 232, 228, 245))
++            painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 25), 1))
++            painter.drawRoundedRect(px, py, pw, ph, 7, 7)
++            col = QtGui.QColor(60, 56, 52)
++            if self.hud_level == "error":
++                col = QtGui.QColor(170, 40, 40)
++            painter.setPen(col)
++            painter.drawText(QtCore.QRect(px, py, pw, ph), QtCore.Qt.AlignCenter, msg)
+ 
+-            # High-contrast dark pill with subtle white border
+-            painter.setBrush(QtGui.QColor(22, 24, 28, 235))
+-            painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 60), 1))
+-            painter.drawRoundedRect(hud_rect, 18, 18)
+ 
+-            # Mic status dot
+-            mode_color = QtGui.QColor(0, 230, 130)
+-            if self.hud_mode == "DICTATION":
+-                mode_color = QtGui.QColor(70, 160, 255)
+-            elif self.hud_mode == "SLEEP":
+-                mode_color = QtGui.QColor(160, 160, 170)
++_LIVE_CANVASES: "weakref.WeakSet" = weakref.WeakSet()
+ 
+-            painter.setBrush(mode_color)
+-            painter.setPen(QtCore.Qt.NoPen)
+-            painter.drawEllipse(pill_x + 14, pill_y + 11, 14, 14)
+-
+-            # Mode indicator text
+-            painter.setPen(mode_color)
+-            font_mode = QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold)
+-            painter.setFont(font_mode)
+-            painter.drawText(pill_x + 36, pill_y + 23, f"{self.hud_mode}")
+-
+-            # Message text
+-            msg_color = QtGui.QColor(245, 245, 245)
+-            if self.hud_level == "warning":
+-                msg_color = QtGui.QColor(255, 200, 60)
+-            elif self.hud_level == "error":
+-                msg_color = QtGui.QColor(255, 80, 80)
+-
+-            painter.setPen(msg_color)
+-            font_msg = QtGui.QFont("Segoe UI", 9)
+-            painter.setFont(font_msg)
+-            display_msg = self.hud_text[:36] if self.hud_text else "Listening..."
+-            painter.drawText(pill_x + 135, pill_y + 23, display_msg)
++
++def _shutdown_canvases() -> None:
++    # Destroy overlay widgets before interpreter finalisation (avoids PySide teardown crash).
++    for c in list(_LIVE_CANVASES):
++        try:
++            c.hide()
++            for name in ("badge_cache", "name_badge_cache", "disambig_badge_cache", "grid_badge_cache"):
++                getattr(c, name).clear()
++            c.deleteLater()
++        except Exception:
++            pass
++    app = QtWidgets.QApplication.instance()
++    if app is not None:
++        try:
++            app.processEvents()
++        except Exception:
++            pass
++
++
++atexit.register(_shutdown_canvases)
+ 
+ 
+ class OverlayService(IOverlayService):
+@@ -264,6 +323,7 @@ class OverlayService(IOverlayService):
+         else:
+             self._app = QtWidgets.QApplication.instance()
+         self._canvas = OverlayCanvas()
++        _LIVE_CANVASES.add(self._canvas)
+ 
+     # -------------------------------------------------------------------------
+     # IOverlayService Contract Implementation
+@@ -319,13 +379,15 @@ class OverlayService(IOverlayService):
+         sub_rect: Optional[ScreenRect] = None,
+         cells: int = 3,
+     ) -> None:
+-        """Render a 3x3 numbered mouse navigation grid across screen or sub-rectangle."""
++        """Show the Apple-style numbered grid (7x4 on screen, 5x5 per drill-down)."""
+         if self._canvas:
+             if sub_rect is not None:
+-                self._canvas.grid_bounds = sub_rect
+-            elif self._canvas.grid_bounds is None:
+-                self._canvas.grid_bounds = ScreenRect(0, 0, 1920, 1080)
+-            self._canvas.grid_cells = cells
++                r = Rect(int(sub_rect.x), int(sub_rect.y), int(sub_rect.width), int(sub_rect.height))
++            else:
++                g = self._canvas.geometry()
++                r = Rect(0, 0, g.width(), g.height())
++            self._canvas.grid_model = GridModel(r)
++            self._canvas.grid_bounds = ScreenRect(r.x, r.y, r.w, r.h)
+             self._canvas.mode = OverlayMode.GRID
+             self._current_mode = OverlayMode.GRID
+             self._canvas.show()
+@@ -333,6 +395,25 @@ class OverlayService(IOverlayService):
+             if self._app:
+                 self._app.processEvents()
+ 
++    def show_text_numbers(self, items: list) -> None:
++        """Badge numbers beside each text item. items: objects with .number and .rect (x,y,w,h) or None."""
++        if not self._canvas:
++            return
++        self._canvas.text_items = [
++            (it.number, QtCore.QRect(*it.rect)) for it in items if getattr(it, "rect", None)
++        ]
++        self._canvas.mode = OverlayMode.TEXT_NUMBERS
++        self._current_mode = OverlayMode.TEXT_NUMBERS
++        self._canvas.show()
++        self._canvas.update()
++        if self._app:
++            self._app.processEvents()
++
++    def hide_text_numbers(self) -> None:
++        if self._current_mode == OverlayMode.TEXT_NUMBERS:
++            self._canvas.text_items = []
++            self.hide()
++
+     def show_disambiguation(
+         self,
+         items: list[DisambiguationItem],
+@@ -370,6 +451,8 @@ class OverlayService(IOverlayService):
+             self._current_mode = OverlayMode.OFF
+             self._canvas.grid_bounds = None
+             self._canvas.grid_history.clear()
++            self._canvas.grid_model = None
++            self._canvas.text_items = []
+             self._canvas.elements.clear()
+             self._canvas.disambiguation_items.clear()
+             self._canvas.hide()
+@@ -389,58 +472,42 @@ class OverlayService(IOverlayService):
+     # -------------------------------------------------------------------------
+ 
+     def drill_down_grid(self, cell_num: int) -> Optional[ScreenRect]:
+-        """Subdivide the active grid cell (1-9) into a recursive 3x3 sub-grid."""
+-        if self._current_mode != OverlayMode.GRID or not self._canvas:
++        """Drill into a grid cell: shows a 5x5 grid there. None if the area can't be drilled further."""
++        if self._current_mode != OverlayMode.GRID or not self._canvas or not self._canvas.grid_model:
+             return None
+-
+-        current = self._canvas.grid_bounds or ScreenRect(0, 0, 1920, 1080)
+-        if not (1 <= cell_num <= 9):
++        gm = self._canvas.grid_model
++        if not gm.drill(cell_num):
+             return None
+-
+-        # Record history for undo
+-        self._canvas.grid_history.append(current)
+-
+-        row = (cell_num - 1) // 3
+-        col = (cell_num - 1) % 3
+-        cw = max(9.0, current.width / 3.0)
+-        ch = max(9.0, current.height / 3.0)
+-
+-        new_rect = ScreenRect(
+-            x=int(current.x + col * (current.width / 3.0)),
+-            y=int(current.y + row * (current.height / 3.0)),
+-            width=int(cw),
+-            height=int(ch),
+-        )
+-        self._canvas.grid_bounds = new_rect
++        bnd = gm.bounds
++        self._canvas.grid_bounds = ScreenRect(bnd.x, bnd.y, bnd.w, bnd.h)
+         self._canvas.update()
+         if self._app:
+             self._app.processEvents()
+-        return new_rect
++        return self._canvas.grid_bounds
+ 
+     def undo_grid(self) -> Optional[ScreenRect]:
+         """Step back up one level in the grid drill-down hierarchy."""
+-        if not self._canvas or not self._canvas.grid_history:
++        if not self._canvas or not self._canvas.grid_model or not self._canvas.grid_model.undo():
+             return None
+-
+-        previous = self._canvas.grid_history.pop()
+-        self._canvas.grid_bounds = previous
++        bnd = self._canvas.grid_model.bounds
++        self._canvas.grid_bounds = ScreenRect(bnd.x, bnd.y, bnd.w, bnd.h)
+         self._canvas.update()
+         if self._app:
+             self._app.processEvents()
+-        return previous
++        return self._canvas.grid_bounds
++
++    def can_drill_grid(self, cell_num: int) -> bool:
++        gm = self._canvas.grid_model if self._canvas else None
++        return bool(gm and gm.can_drill(cell_num))
++
++    def grid_cell_count(self) -> int:
++        gm = self._canvas.grid_model if self._canvas else None
++        return gm.count if gm else 0
+ 
+     def get_grid_cell_center(self, cell_num: int) -> Optional[tuple[int, int]]:
+-        """Compute the screen center coordinates of cell (1-9) in active grid."""
+-        if not self._canvas or not (1 <= cell_num <= 9):
+-            return None
+-        current = self._canvas.grid_bounds or ScreenRect(0, 0, 1920, 1080)
+-        row = (cell_num - 1) // 3
+-        col = (cell_num - 1) % 3
+-        cw = current.width / 3.0
+-        ch = current.height / 3.0
+-        cx = int(current.x + col * cw + cw / 2.0)
+-        cy = int(current.y + row * ch + ch / 2.0)
+-        return (cx, cy)
++        """Screen centre of a cell in the active grid."""
++        gm = self._canvas.grid_model if self._canvas else None
++        return gm.center(cell_num) if gm else None
+ 
+     # -------------------------------------------------------------------------
+     # Backward Compatibility Aliases for Engine & Tests
+diff --git a/src/voxpilot/speech/vosk_engine.py b/src/voxpilot/speech/vosk_engine.py
+index 7ec0189..d7428eb 100644
+--- a/src/voxpilot/speech/vosk_engine.py
++++ b/src/voxpilot/speech/vosk_engine.py
+@@ -77,8 +77,16 @@ class VoskSpeechEngine:
+         self._reinit_recognizer()
+         self._is_running = True
+ 
++    def set_open_vocabulary(self, open_vocab: bool) -> None:
++        """Dictation/Spelling/Swift need open vocabulary; Command mode uses the closed command grammar."""
++        if getattr(self, "_open_vocab", False) == open_vocab:
++            return
++        self._open_vocab = open_vocab
++        if self._is_running:
++            self._reinit_recognizer()
++
+     def _reinit_recognizer(self) -> None:
+-        if self._grammar_phrases:
++        if self._grammar_phrases and not getattr(self, "_open_vocab", False):
+             # Construct distinct vocabulary with [unk] token for unconstrained non-command speech filtering
+             vocab = sorted(list({p.lower().strip() for p in self._grammar_phrases if p.strip()}))
+             grammar_json = json.dumps(vocab + ["[unk]"])
+diff --git a/src/voxpilot/textnav/__init__.py b/src/voxpilot/textnav/__init__.py
+new file mode 100644
+index 0000000..8499759
+--- /dev/null
++++ b/src/voxpilot/textnav/__init__.py
+@@ -0,0 +1,4 @@
++from .text_numbers import TextNumbering, TextItem, ITextTarget
++from .swift_mode import SwiftFormatter
++
++__all__ = ["TextNumbering", "TextItem", "ITextTarget", "SwiftFormatter"]
+diff --git a/src/voxpilot/textnav/swift_mode.py b/src/voxpilot/textnav/swift_mode.py
+new file mode 100644
+index 0000000..d23d35b
+--- /dev/null
++++ b/src/voxpilot/textnav/swift_mode.py
+@@ -0,0 +1,114 @@
++"""Swift mode: speak Swift code as you would read it aloud.
++
++Apple guide: "Voice Control writes Swift code. Pronounce the code just as you'd
++read it out loud. Voice Control understands Swift syntax and handles formatting
++automatically - like where spaces appear, whether expressions correspond to
++operators and where medial capitals belong."
++
++Rule based approximation (Apple's exact grammar is not public). Keywords stay
++as written, operator words become symbols with Swift spacing, and consecutive
++identifier words are joined with medial capitals (camelCase).
++"""
++from __future__ import annotations
++
++from typing import List
++
++KEYWORDS = {
++    "let", "var", "func", "if", "else", "for", "in", "while", "return", "struct", "class", "enum",
++    "import", "guard", "switch", "case", "default", "true", "false", "nil", "self", "init", "protocol",
++    "extension", "static", "private", "public", "try", "throws", "break", "continue", "where", "as", "is",
++    "do", "catch", "defer", "repeat", "override", "final", "async", "await", "some", "any",
++}
++# word sequence -> (symbol, space_before, space_after)
++BINARY = {
++    ("equals",): "=", ("is", "equal", "to"): "==", ("double", "equals"): "==", ("equal", "equal"): "==",
++    ("not", "equal", "to"): "!=", ("not", "equals"): "!=",
++    ("plus",): "+", ("minus",): "-", ("times",): "*", ("divided", "by"): "/", ("modulo",): "%",
++    ("less", "than", "or", "equal", "to"): "<=", ("greater", "than", "or", "equal", "to"): ">=",
++    ("less", "than"): "<", ("greater", "than"): ">",
++    ("and", "and"): "&&", ("logical", "and"): "&&", ("logical", "or"): "||",
++    ("arrow",): "->", ("plus", "equals"): "+=", ("minus", "equals"): "-=",
++    ("range", "to"): "...", ("half", "open", "range"): "..<",
++}
++OPEN = {("open", "paren"): "(", ("left", "paren"): "(", ("open", "brace"): "{", ("left", "brace"): "{",
++        ("open", "bracket"): "[", ("left", "bracket"): "["}
++CLOSE = {("close", "paren"): ")", ("right", "paren"): ")", ("close", "brace"): "}", ("right", "brace"): "}",
++         ("close", "bracket"): "]", ("right", "bracket"): "]"}
++TIGHT = {("dot",): ".", ("period",): ".", ("comma",): ",", ("colon",): ":", ("semicolon",): ";",
++         ("question", "mark"): "?", ("bang",): "!", ("exclamation", "mark"): "!"}
++NUMBERS = {"zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
++           "seven": "7", "eight": "8", "nine": "9", "ten": "10"}
++
++
++class SwiftFormatter:
++    """Turn a spoken phrase into Swift source text."""
++
++    def format(self, spoken: str) -> str:
++        words = spoken.lower().replace(",", " ").split()
++        toks: List[tuple] = []  # (kind, text)
++        ident: List[str] = []
++        i = 0
++
++        def flush() -> None:
++            if ident:
++                s = ident[0] + "".join(w[:1].upper() + w[1:] for w in ident[1:])
++                toks.append(("id", s))
++                ident.clear()
++
++        def match(table):
++            for n in (5, 4, 3, 2, 1):
++                key = tuple(words[i:i + n])
++                if len(key) == n and key in table:
++                    return key, table[key]
++            return None, None
++
++        while i < len(words):
++            w = words[i]
++            if w == "quote":
++                flush()
++                j = i + 1
++                lit = []
++                while j < len(words) and words[j] not in ("quote", "unquote", "end"):
++                    lit.append(words[j]); j += 1
++                toks.append(("str", '"' + " ".join(lit) + '"'))
++                i = j + 1
++                continue
++            if w == "capital" and i + 1 < len(words):
++                ident.append(words[i + 1].capitalize()) if not ident else ident.append(words[i + 1])
++                if len(ident) == 1:
++                    pass
++                i += 2
++                continue
++            for table, kind in ((BINARY, "bin"), (OPEN, "open"), (CLOSE, "close"), (TIGHT, "tight")):
++                key, sym = match(table)
++                if key:
++                    flush(); toks.append((kind, sym)); i += len(key)
++                    break
++            else:
++                if w in NUMBERS:
++                    flush(); toks.append(("num", NUMBERS[w]))
++                elif w in KEYWORDS:
++                    flush(); toks.append(("kw", w))
++                else:
++                    ident.append(w)
++                i += 1
++        flush()
++        return self._join(toks)
++
++    @staticmethod
++    def _join(toks: List[tuple]) -> str:
++        out = ""
++        prev = None
++        for kind, t in toks:
++            if prev is None:
++                out += t
++            elif kind in ("close", "tight"):
++                out += t
++            elif prev in ("open",) or (prev == "tight" and out.endswith(".")):
++                out += t
++            elif kind == "open" and prev in ("id",):
++                out += t  # call: foo(
++            else:
++                out += " " + t
++            prev = kind
++        return out
+diff --git a/src/voxpilot/textnav/text_numbers.py b/src/voxpilot/textnav/text_numbers.py
+new file mode 100644
+index 0000000..55d37c8
+--- /dev/null
++++ b/src/voxpilot/textnav/text_numbers.py
+@@ -0,0 +1,132 @@
++"""Text numbers for Voice Control ("Show text numbers" / "Hide text numbers").
++
++Apple guide (mh40719): in a text input area with numbers shown, a number is
++displayed next to each line of text. Selecting a line or section shows a number
++for each word in the selection; selecting a single word shows a number for each
++character. Saying a command such as Delete or Uppercase followed by an item's
++number acts on that item.
++
++Pure logic: the focused control is reached through ITextTarget so this module
++is testable without Windows.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import List, Optional, Protocol, Tuple
++import re
++
++
++class ITextTarget(Protocol):
++    def get_text(self) -> str: ...
++    def select_range(self, start: int, end: int) -> bool: ...
++    def get_selection(self) -> Tuple[int, int]: ...
++
++
++@dataclass(frozen=True)
++class TextItem:
++    number: int
++    start: int
++    end: int
++    text: str
++    rect: Optional[Tuple[int, int, int, int]] = None  # screen x, y, w, h
++
++
++class TextNumbering:
++    LEVELS = ("line", "word", "char")
++
++    def __init__(self, target: ITextTarget) -> None:
++        self.target = target
++        self.visible = False
++        self.level = "line"
++        self.items: List[TextItem] = []
++        self._scope: Tuple[int, int] = (0, 0)
++
++    # -- state -------------------------------------------------------------
++    def show(self) -> List[TextItem]:
++        self.visible = True
++        self.level = "line"
++        text = self.target.get_text()
++        self._scope = (0, len(text))
++        self.items = self._split(text, 0, len(text), "line")
++        return self.items
++
++    def hide(self) -> None:
++        self.visible = False
++        self.items = []
++        self.level = "line"
++
++    def refresh(self) -> List[TextItem]:
++        """Re-read the control (text may have changed after an edit)."""
++        if not self.visible:
++            return []
++        text = self.target.get_text()
++        s, e = self._scope
++        if self.level == "line" or e > len(text):
++            self._scope = (0, len(text))
++            s, e = self._scope
++            self.level = "line"
++        self.items = self._split(text, s, e, self.level)
++        return self.items
++
++    # -- splitting ---------------------------------------------------------
++    @staticmethod
++    def _split(text: str, start: int, end: int, level: str) -> List[TextItem]:
++        seg = text[start:end]
++        spans: List[Tuple[int, int]] = []
++        if level == "line":
++            pos = 0
++            for part in seg.splitlines(keepends=True):
++                body = part.rstrip("\r\n")
++                if body.strip():
++                    spans.append((pos, pos + len(body)))
++                pos += len(part)
++        elif level == "word":
++            spans = [(m.start(), m.end()) for m in re.finditer(r"\S+", seg)]
++        else:
++            spans = [(i, i + 1) for i, ch in enumerate(seg) if not ch.isspace()]
++        return [TextItem(i + 1, start + a, start + b, text[start + a:start + b]) for i, (a, b) in enumerate(spans)]
++
++    # -- lookup ------------------------------------------------------------
++    def get(self, number: int) -> Optional[TextItem]:
++        for it in self.items:
++            if it.number == number:
++                return it
++        return None
++
++    # -- commands ----------------------------------------------------------
++    def select(self, number: int) -> bool:
++        """Select item; drill to words (from a line) or characters (from a word)."""
++        it = self.get(number)
++        if it is None:
++            return False
++        if not self.target.select_range(it.start, it.end):
++            return False
++        text = self.target.get_text()
++        if self.level == "line":
++            self.level = "word"
++        elif self.level == "word":
++            self.level = "char"
++        self._scope = (it.start, it.end)
++        self.items = self._split(text, it.start, it.end, self.level)
++        return True
++
++    def apply(self, op: str, number: int) -> bool:
++        """op in delete|uppercase|lowercase|capitalize. Returns False if item missing."""
++        it = self.get(number)
++        if it is None:
++            return False
++        if not self.target.select_range(it.start, it.end):
++            return False
++        return True
++
++    @staticmethod
++    def transform(op: str, text: str) -> Optional[str]:
++        if op == "delete":
++            return ""
++        if op == "uppercase":
++            return text.upper()
++        if op == "lowercase":
++            return text.lower()
++        if op == "capitalize":
++            return text[:1].upper() + text[1:]
++        return None
+diff --git a/tests/test_adversarial_round2.py b/tests/test_adversarial_round2.py
+index 13af9a1..3c60423 100644
+--- a/tests/test_adversarial_round2.py
++++ b/tests/test_adversarial_round2.py
+@@ -107,21 +107,25 @@ def test_adversarial_grid_extreme_drill_down() -> None:
+     overlay = OverlayService()
+     overlay.show_grid()
+ 
+-    # Drill down 10 levels deep
++    # Apple grid: drilling stops once an area can't be drilled further (then a number clicks)
++    depth = 0
+     for _ in range(10):
+-        rect = overlay.drill_down_grid(5)
+-        assert rect is not None
++        rect = overlay.drill_down_grid(13)
++        if rect is None:
++            break
++        depth += 1
+         assert rect.width >= 1
+         assert rect.height >= 1
++    assert 1 <= depth < 10
+ 
+     # Coordinates must remain valid finite numbers
+-    coords = overlay.get_grid_cell_center(5)
++    coords = overlay.get_grid_cell_center(13)
+     assert coords is not None
+     assert 0 <= coords[0] <= 1920
+     assert 0 <= coords[1] <= 1080
+ 
+-    # Step back up 10 times
+-    for _ in range(10):
++    # Step back up as many times as we drilled
++    for _ in range(depth):
+         popped = overlay.undo_grid()
+         assert popped is not None
+ 
+@@ -134,7 +138,7 @@ def test_adversarial_grid_invalid_cell_indices() -> None:
+     overlay = OverlayService()
+     overlay.show_grid()
+ 
+-    for invalid_cell in [0, 10, -1, 999, -50]:
++    for invalid_cell in [0, 29, -1, 999, -50]:
+         assert overlay.drill_down_grid(invalid_cell) is None
+         assert overlay.get_grid_cell_center(invalid_cell) is None
+ 
+diff --git a/tests/test_engine_text_entry.py b/tests/test_engine_text_entry.py
+new file mode 100644
+index 0000000..1dfe708
+--- /dev/null
++++ b/tests/test_engine_text_entry.py
+@@ -0,0 +1,66 @@
++"""Engine text-entry wiring tests (Linux-safe: stubs Win32 and heavy deps)."""
++import sys, ctypes, types
++from unittest.mock import MagicMock
++import pytest
++
++if not hasattr(ctypes, "windll"):
++    ctypes.windll = MagicMock()
++import importlib
++for m in ("PySide6", "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "psutil", "vosk", "uiautomation", "comtypes", "faster_whisper"):
++    try:
++        importlib.import_module(m)
++    except Exception:
++        sys.modules[m] = MagicMock()
++
++from voxpilot.contracts.dto import EngineMode, TranscriptEvent  # noqa: E402
++
++
++@pytest.fixture
++def engine():
++    try:
++        from voxpilot.engine import VoxPilotEngine
++    except Exception as exc:  # pragma: no cover
++        pytest.skip(f"engine not importable here: {exc}")
++    inj = MagicMock()
++    inj.type_unicode.return_value = True
++    e = VoxPilotEngine(speech_engine=MagicMock(), element_provider=MagicMock(),
++                       overlay_service=MagicMock(), input_injector=inj)
++    e.dictation_service.context_service = None
++    return e, inj
++
++
++def say(e, t):
++    e._on_transcript(TranscriptEvent(text=t, is_final=True))
++
++
++def test_dictation_is_default(engine):
++    e, _ = engine
++    assert e.mode == EngineMode.DICTATION
++
++
++def test_dictation_formats_and_types(engine):
++    e, inj = engine
++    say(e, "hello world comma how are you question mark")
++    inj.type_unicode.assert_called()
++    assert inj.type_unicode.call_args[0][0].startswith("Hello world, how are you?")
++
++
++def test_spelling_mode_phonetic_alfa(engine):
++    e, inj = engine
++    say(e, "spelling mode")
++    assert e.mode == EngineMode.SPELLING
++    say(e, "alfa bravo charlie")
++    assert inj.type_unicode.call_args[0][0] == "abc"
++
++
++def test_command_mode_ignores_plain_text(engine):
++    e, inj = engine
++    say(e, "command mode")
++    say(e, "random words here")
++    inj.type_unicode.assert_not_called()
++
++
++def test_commands_win_in_dictation_mode(engine):
++    e, inj = engine
++    say(e, "go to sleep")
++    assert e.mode == EngineMode.SLEEP
+diff --git a/tests/test_extended_commands.py b/tests/test_extended_commands.py
+index ae6c313..8eca7eb 100644
+--- a/tests/test_extended_commands.py
++++ b/tests/test_extended_commands.py
+@@ -170,6 +170,7 @@ def test_engine_extended_intent_execution() -> None:
+     # Grid cell click
+     mock_overlay.is_grid_visible.return_value = True
+     mock_overlay.get_grid_cell_center.return_value = (960, 540)
++    mock_overlay.can_drill_grid.return_value = False  # area can't be drilled further: a number clicks
+     mock_input.reset_mock()
+     res = engine.execute_intent(Intent(name="CLICK_NUMBER", slots={"number": 5}, raw_text="5"))
+     assert res.status == CommandStatus.SUCCESS
+diff --git a/tests/test_fault_injection.py b/tests/test_fault_injection.py
+index 648e889..6561947 100644
+--- a/tests/test_fault_injection.py
++++ b/tests/test_fault_injection.py
+@@ -218,7 +218,7 @@ def test_corrupt_and_truncated_audio_chunk():
+ 
+ 
+ def test_invalid_and_out_of_bounds_grid_operations():
+-    """Verify that invalid grid operations (e.g. cell out of 1-9 bounds) are rejected."""
++    """Verify that invalid grid operations (e.g. cell out of the 1-28 top-level bounds) are rejected."""
+     from voxpilot.overlay.overlay_service import OverlayService
+ 
+     overlay = OverlayService()
+@@ -226,10 +226,10 @@ def test_invalid_and_out_of_bounds_grid_operations():
+ 
+     # Valid drill down returns new ScreenRect
+     assert overlay.drill_down_grid(5) is not None
+-    # Invalid cell 0 (only 1-9 allowed) returns None
++    # Invalid cell 0 returns None
+     assert overlay.drill_down_grid(0) is None
+-    # Invalid cell 15 returns None
+-    assert overlay.drill_down_grid(15) is None
++    # Invalid cell 29 (top-level grid is 7x4 = 28 cells) returns None
++    assert overlay.drill_down_grid(29) is None
+ 
+     # Undo returns previous ScreenRect
+     assert overlay.undo_grid() is not None
+diff --git a/tests/test_macos_parity.py b/tests/test_macos_parity.py
+index b0eee0e..c504277 100644
+--- a/tests/test_macos_parity.py
++++ b/tests/test_macos_parity.py
+@@ -357,5 +357,5 @@ def test_macos_extended_engine_dispatch() -> None:
+     # 9. Show commands
+     res_cmds = engine.dispatch_intent(Intent(name="SHOW_COMMANDS"))
+     assert res_cmds.status == CommandStatus.SUCCESS
+-    mock_overlay.show_hud.assert_called_once()
++    assert engine.visible_commands  # Apple-style Commands window list replaces the HUD text dump
+ 
+diff --git a/tests/test_text_numbers_swift.py b/tests/test_text_numbers_swift.py
+new file mode 100644
+index 0000000..2211c0b
+--- /dev/null
++++ b/tests/test_text_numbers_swift.py
+@@ -0,0 +1,53 @@
++from voxpilot.textnav import TextNumbering, SwiftFormatter
++
++
++class FakeTarget:
++    def __init__(self, text):
++        self.text = text
++        self.sel = None
++
++    def get_text(self):
++        return self.text
++
++    def select_range(self, s, e):
++        self.sel = (s, e)
++        return True
++
++    def get_selection(self):
++        return self.sel or (0, 0)
++
++
++def test_lines_numbered_then_words_then_chars():
++    t = FakeTarget("hello big world\nsecond line")
++    n = TextNumbering(t)
++    items = n.show()
++    assert [i.text for i in items] == ["hello big world", "second line"]
++    assert n.select(1)
++    assert t.sel == (0, 15)
++    assert [i.text for i in n.items] == ["hello", "big", "world"]
++    assert n.select(2)
++    assert [i.text for i in n.items] == ["b", "i", "g"]
++
++
++def test_apply_and_transform():
++    t = FakeTarget("one two")
++    n = TextNumbering(t)
++    n.show(); n.select(1)
++    assert n.apply("uppercase", 2) and t.sel == (4, 7)
++    assert TextNumbering.transform("uppercase", "two") == "TWO"
++    assert TextNumbering.transform("delete", "two") == ""
++    assert TextNumbering.transform("capitalize", "two") == "Two"
++    assert not n.apply("delete", 99)
++
++
++def test_hide():
++    n = TextNumbering(FakeTarget("a"))
++    n.show(); n.hide()
++    assert not n.visible and n.items == []
++
++
++def test_swift_basic():
++    f = SwiftFormatter()
++    assert f.format("let my value equals five") == "let myValue = 5"
++    assert f.format("if x double equals ten open brace") == "if x == 10 {"
++    assert f.format("func add open paren a colon int comma b colon int close paren arrow int") == "func add(a: int, b: int) -> int"
+diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
+new file mode 100644
+index 0000000..6cf0d93
+--- /dev/null
++++ b/tests/test_voice_control_parity.py
+@@ -0,0 +1,133 @@
++"""Apple Voice Control guide parity tests (grid model, phonetic editing, engine semantics)."""
++import sys, ctypes, importlib
++from unittest.mock import MagicMock
++import pytest
++
++if not hasattr(ctypes, "windll"):
++    ctypes.windll = MagicMock()
++for m in ("PySide6", "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "psutil", "vosk", "uiautomation", "comtypes", "faster_whisper"):
++    try:
++        importlib.import_module(m)
++    except Exception:
++        sys.modules[m] = MagicMock()
++
++from voxpilot.overlay.grid_model import GridModel, Rect  # noqa: E402
++from voxpilot.dictation.formatting import FormattingEngine  # noqa: E402
++from voxpilot.contracts.dto import EngineMode, TranscriptEvent  # noqa: E402
++
++
++def test_grid_top_level_is_7x4_numbered_row_major():
++    g = GridModel(Rect(0, 0, 1144, 746))
++    assert (g.cols, g.rows, g.count) == (7, 4, 28)
++    assert g.cell_rect(1).x == 0 and g.cell_rect(8).y > 0 and g.cell_rect(28) is not None
++    assert g.cell_rect(29) is None
++    cx, cy = g.center(1)
++    assert 0 < cx < 163 and 0 < cy < 187
++
++
++def test_grid_drill_is_5x5_and_undo():
++    g = GridModel(Rect(0, 0, 1920, 1080))
++    assert g.drill(10)
++    assert (g.cols, g.rows, g.count) == (5, 5, 25)
++    b = g.bounds
++    assert b.x >= 0 and b.y >= 0 and b.x + b.w <= 1920 and b.y + b.h <= 1080
++    assert g.undo() and g.count == 28
++    assert not g.undo()
++
++
++def test_grid_eventually_cannot_drill_and_unframes():
++    g = GridModel(Rect(0, 0, 1920, 1080))
++    depth = 0
++    while g.can_drill(13) and depth < 20:
++        assert g.drill(13)
++        depth += 1
++    assert 1 <= depth < 20
++    assert not g.drill(13)
++    assert not g.framed()
++
++
++def test_phonetic_replace_in_spelling_mode():
++    f = FormattingEngine()
++    assert f.phonetic_command("Replace Charlie Alfa Tango with Delta Oscar Golf") == "replace cat with dog"
++    assert f.phonetic_command("replace cat with dog") == "replace cat with dog"
++
++
++@pytest.fixture
++def engine():
++    try:
++        from voxpilot.engine import VoxPilotEngine
++    except Exception as exc:
++        pytest.skip(f"engine not importable: {exc}")
++    inj = MagicMock()
++    ov = MagicMock()
++    ov.is_grid_visible.return_value = True
++    ov.grid_cell_count.return_value = 28
++    ov.get_grid_cell_center.return_value = (100, 200)
++    e = VoxPilotEngine(speech_engine=MagicMock(), element_provider=MagicMock(), overlay_service=ov, input_injector=inj)
++    return e, inj, ov
++
++
++def say(e, t):
++    e._on_transcript(TranscriptEvent(text=t, is_final=True))
++
++
++def test_bare_grid_number_drills_when_possible(engine):
++    e, inj, ov = engine
++    ov.can_drill_grid.return_value = True
++    say(e, "command mode")
++    say(e, "twelve")
++    ov.drill_down_grid.assert_called_with(12)
++    inj.click_at.assert_not_called()
++
++
++def test_bare_grid_number_clicks_when_cannot_drill_and_grid_hides(engine):
++    e, inj, ov = engine
++    ov.can_drill_grid.return_value = False
++    say(e, "command mode")
++    say(e, "twelve")
++    inj.click_at.assert_called()
++    ov.hide_grid.assert_called()
++
++
++def test_click_with_grid_number_clicks_and_grid_disappears(engine):
++    e, inj, ov = engine
++    ov.can_drill_grid.return_value = True
++    say(e, "command mode")
++    say(e, "click twelve")
++    inj.click_at.assert_called()
++    ov.hide_grid.assert_called()
++    ov.drill_down_grid.assert_not_called()
++
++
++def test_show_commands_context_lists_text_commands_first(engine):
++    e, _, _ = engine
++    say(e, "show commands")
++    assert e.visible_commands[0][0] == "Text editing"
++    say(e, "command mode")
++    say(e, "show commands")
++    assert e.visible_commands[0][0] == "Basic navigation"
++
++
++def test_open_vocabulary_for_text_modes_closed_for_command(engine):
++    e, _, _ = engine
++    se = e.speech_engine
++    say(e, "command mode")
++    se.set_open_vocabulary.assert_called_with(False)
++    say(e, "dictation mode")
++    se.set_open_vocabulary.assert_called_with(True)
++
++
++def test_tray_microphone_choice_restarts_capture(monkeypatch) -> None:
++    from unittest.mock import MagicMock
++    from voxpilot.app import tray as T
++
++    monkeypatch.setattr(T.VoxPilotTrayIcon, "list_input_devices", staticmethod(lambda: [(1, "Mic A"), (3, "Mic B")]))
++    eng = MagicMock()
++    icon = T.VoxPilotTrayIcon(eng)
++    icon.refresh_microphones()
++    assert [a.text() for a in icon._mic_actions] == ["Mic A", "Mic B"]
++    icon._select_microphone(3)
++    eng.stop_live_capture.assert_called_once()
++    eng.start_live_capture.assert_called_once_with(device_id=3)
++    icon.refresh_microphones()
++    assert [a.isChecked() for a in icon._mic_actions] == [False, True]
