@@ -1,4 +1,4 @@
-# run 15
+# run 16
 name: update-source-branch
 on:
   push:
@@ -20,127 +20,89 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply fix15 (inline patch)
+      - name: Apply fix16 (inline patch)
         shell: bash
         run: |
-          cat > vehicle/fix15.patch <<'PATCH_EOF'
+          cat > vehicle/fix16.patch <<'PATCH_EOF'
           diff --git a/src/voxpilot/app/tray.py b/src/voxpilot/app/tray.py
-          index bcf523b..76c61eb 100644
+          index 76c61eb..b750277 100644
           --- a/src/voxpilot/app/tray.py
           +++ b/src/voxpilot/app/tray.py
-          @@ -418,15 +418,24 @@ def main() -> int:
+          @@ -353,7 +353,13 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                               self._select_microphone(idx)
+                               return
            
-               logger.info("Initializing VoxPilot Engine...")
-               engine = VoxPilotEngine()
-          -    engine.start(live_mic=not args.no_mic, device_id=args.device)
-               from .settings_store import VoiceControlSettings
-          -    engine.apply_settings(VoiceControlSettings.load())
-          +    saved = VoiceControlSettings.load()
-          +    device = args.device
-          +    if device is None and saved.microphone and saved.microphone != "Automatic":
-          +        for idx, name in VoxPilotTrayIcon.list_input_devices():
-          +            if name == saved.microphone:
-          +                device = idx  # saved Microphone setting, if that device is still present
-          +                break
-          +    engine.start(live_mic=not args.no_mic, device_id=device)
-          +    engine.apply_settings(saved)
-           
-               def on_exit() -> None:
-                   logger.info("Shutting down VoxPilot...")
-                   engine.stop()
-           
-               tray = VoxPilotTrayIcon(engine=engine, on_exit=on_exit)
-          +    if device is not None:
-          +        tray._selected_mic = device
-               tray.show()
-           
-               # Periodic timer to allow Python signal handling (Ctrl+C) in Qt event loop
+          +        def current_mic():
+          +            if self._selected_mic is None:
+          +                return "Automatic"
+          +            return dict(self.list_input_devices()).get(self._selected_mic)
+          +
+                   hooks = {
+          +            "current_mic": current_mic,
+                       "list_mics": self.list_input_devices,
+                       "select_mic": select_mic,
+                       "set_listening": lambda on: self._start_listening() if on else self._stop_listening(),
           diff --git a/src/voxpilot/app/voice_settings.py b/src/voxpilot/app/voice_settings.py
-          index b06621d..ef0dc44 100644
+          index ef0dc44..1f8f73d 100644
           --- a/src/voxpilot/app/voice_settings.py
           +++ b/src/voxpilot/app/voice_settings.py
-          @@ -76,6 +76,8 @@ class CommandsDialog(QtWidgets.QDialog):
-                   split = QtWidgets.QSplitter()
-                   self.tree = QtWidgets.QTreeWidget()
-                   self.tree.setHeaderHidden(True)
-          +        self.tree.setTextElideMode(QtCore.Qt.ElideNone)
-          +        self.tree.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-                   self.tree.setAlternatingRowColors(True)
-                   self.tree.currentItemChanged.connect(self._preview)
-                   self.preview = QtWidgets.QTextBrowser()
-          @@ -109,9 +111,11 @@ class CommandsDialog(QtWidgets.QDialog):
-                       top = QtWidgets.QTreeWidgetItem([cat])
-                       self.tree.addTopLevelItem(top)
-                       for phrase, desc in items:
-          -                it = QtWidgets.QTreeWidgetItem([phrase])
-          -                it.setData(0, QtCore.Qt.UserRole + 1, desc)
-          -                top.addChild(it)
-          +                for single in phrase.split(" / "):  # one row per spoken command, like Apple's list
-          +                    it = QtWidgets.QTreeWidgetItem([single])
-          +                    it.setToolTip(0, single)
-          +                    it.setData(0, QtCore.Qt.UserRole + 1, desc)
-          +                    top.addChild(it)
-                   chars = QtWidgets.QTreeWidgetItem(["Dictation and Spelling characters"])
-                   self.tree.addTopLevelItem(chars)
-                   for phrase, desc in character_rows():
-          @@ -277,6 +281,13 @@ class VoiceControlSettingsWindow(QtWidgets.QWidget):
-                   adv.setMenu(menu)
-                   form.addRow("Advanced Actions", adv)
+          @@ -286,6 +286,18 @@ class VoiceControlSettingsWindow(QtWidgets.QWidget):
+                   self.enabled.blockSignals(True)
+                   self.enabled.setChecked(self.engine.mode.value != "sleep")
+                   self.enabled.blockSignals(False)
+          +        current = (self.hooks.get("current_mic") or (lambda: None))()
+          +        if current:
+          +            i = self.mic.findText(current)
+          +            if i >= 0:
+          +                self.mic.blockSignals(True)
+          +                self.mic.setCurrentIndex(i)
+          +                self.mic.blockSignals(False)
+          +                self.settings.microphone = current  # keep the saved choice equal to what the tray is using
+          +                try:
+          +                    self.settings.save()
+          +                except OSError:
+          +                    pass
+                   super().showEvent(ev)
            
-          +    def showEvent(self, ev) -> None:  # noqa: N802
-          +        """Reflect what the tray did meanwhile (Stop/Start Listening)."""
-          +        self.enabled.blockSignals(True)
-          +        self.enabled.setChecked(self.engine.mode.value != "sleep")
-          +        self.enabled.blockSignals(False)
-          +        super().showEvent(ev)
-          +
                # -- actions -------------------------------------------------------------------------------
-               def _set(self, name: str, value) -> None:
-                   setattr(self.settings, name, value)
           diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
-          index 39948dc..2ceb7b8 100644
+          index 2ceb7b8..d8b61fe 100644
           --- a/tests/test_voice_control_parity.py
           +++ b/tests/test_voice_control_parity.py
-          @@ -473,3 +473,37 @@ def test_hide_application_really_minimises_notepad() -> None:
-                   assert u32.IsIconic(hwnd)
-               finally:
-                   proc.kill()
+          @@ -507,3 +507,31 @@ def test_fade_is_off_by_default_and_dims_only_when_enabled() -> None:
+               assert abs(ov._canvas.windowOpacity() - 0.5) < 0.05
+               ov.touch()
+               assert ov._canvas.windowOpacity() == 1.0
           +
           +
-          +def test_play_sound_setting_beeps_only_when_on(engine, monkeypatch) -> None:
-          +    import types
-          +    beeps = []
-          +    fake = types.SimpleNamespace(MessageBeep=lambda *_a: beeps.append(1), MB_OK=0)
-          +    monkeypatch.setitem(sys.modules, "winsound", fake)
-          +    e, _, _ = engine
-          +    e.settings.play_sound = False
-          +    say(e, "scroll down")
-          +    assert not beeps
-          +    e.settings.play_sound = True
-          +    say(e, "scroll down")
-          +    assert beeps
-          +
-          +
-          +def test_fade_is_off_by_default_and_dims_only_when_enabled() -> None:
+          +def test_settings_toggle_and_mic_call_hooks_and_resync(engine, tmp_path, monkeypatch) -> None:
           +    from PySide6 import QtWidgets
           +    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-          +    from voxpilot.overlay.overlay_service import OverlayService
-          +    from voxpilot.app.settings_store import VoiceControlSettings
-          +    assert VoiceControlSettings().fade_overlay is False  # numbers must never fade unless the user asks
-          +    ov = OverlayService()
-          +    ov.show_grid()
-          +    if ov._canvas is None:
-          +        pytest.skip("canvas not created without show")
-          +    ov.set_fade(False, 1, 0.5)
-          +    ov._fade_now()
-          +    assert ov._canvas.windowOpacity() == 1.0
-          +    ov.set_fade(True, 1, 0.5)
-          +    ov._fade_now()
-          +    assert abs(ov._canvas.windowOpacity() - 0.5) < 0.05
-          +    ov.touch()
-          +    assert ov._canvas.windowOpacity() == 1.0
+          +    monkeypatch.setenv("VOXPILOT_SETTINGS_DIR", str(tmp_path))
+          +    from voxpilot.app.voice_settings import VoiceControlSettingsWindow
+          +    e, _, _ = engine
+          +    calls, state = [], {"mic": "Automatic"}
+          +    hooks = {
+          +        "list_mics": lambda: [(1, "Laptop Microphone"), (3, "Headset")],
+          +        "set_listening": lambda on: calls.append(("listen", on)),
+          +        "select_mic": lambda name: calls.append(("mic", name)),
+          +        "current_mic": lambda: state["mic"],
+          +    }
+          +    w = VoiceControlSettingsWindow(e, hooks)
+          +    w.enabled.setChecked(False)
+          +    w.enabled.setChecked(True)
+          +    assert calls == [("listen", False), ("listen", True)]
+          +    w.mic.setCurrentText("Headset")
+          +    assert ("mic", "Headset") in calls and e.settings.microphone == "Headset"
+          +    state["mic"] = "Laptop Microphone"  # tray changed the mic while the window was closed
+          +    w.show()
+          +    assert w.mic.currentText() == "Laptop Microphone"
+          +    assert e.settings.microphone == "Laptop Microphone"  # saved choice follows the tray; no capture restart
+          +    n = len(calls)
+          +    w.hide(); w.show()
+          +    assert len(calls) == n
           PATCH_EOF
-          git apply --whitespace=nowarn vehicle/fix15.patch
+          git apply --whitespace=nowarn vehicle/fix16.patch
       - name: Setup and test
         shell: cmd
         run: setup_windows.bat
@@ -156,5 +118,5 @@ jobs:
           git config user.name "voxpilot-parity-bot"
           git config user.email "noreply@users.noreply.github.com"
           git add -A -- . ':!vehicle' ':!.venv' ':!models'
-          git commit -m "Settings follow-ups: command rows, saved microphone, behaviour tests"
+          git commit -m "Settings: mic live-sync, hook tests"
           git push origin voxpilot-voice-control-parity
