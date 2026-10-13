@@ -1,0 +1,30 @@
+name: validate-setup
+on:
+  workflow_dispatch:
+  push:
+    branches: [voxpilot-parity-windows-test]
+    paths: [".github/workflows/validate-setup.yml"]
+jobs:
+  fresh-clone:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: voxpilot-voice-control-parity
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Fresh setup via setup_windows.bat
+        shell: cmd
+        run: setup_windows.bat
+      - name: Check install
+        shell: cmd
+        run: |
+          dir models\vosk-model-small-en-us-0.15
+          .venv\Scripts\python -c "import PySide6, vosk, uiautomation; print('imports ok')"
+      - name: Tests
+        shell: cmd
+        env:
+          PYTHONPATH: src
+          QT_QPA_PLATFORM: offscreen
+        run: .venv\Scripts\python -m pytest -q tests --tb=short
