@@ -473,3 +473,37 @@ def test_hide_application_really_minimises_notepad() -> None:
         assert u32.IsIconic(hwnd)
     finally:
         proc.kill()
+
+
+def test_play_sound_setting_beeps_only_when_on(engine, monkeypatch) -> None:
+    import types
+    beeps = []
+    fake = types.SimpleNamespace(MessageBeep=lambda *_a: beeps.append(1), MB_OK=0)
+    monkeypatch.setitem(sys.modules, "winsound", fake)
+    e, _, _ = engine
+    e.settings.play_sound = False
+    say(e, "scroll down")
+    assert not beeps
+    e.settings.play_sound = True
+    say(e, "scroll down")
+    assert beeps
+
+
+def test_fade_is_off_by_default_and_dims_only_when_enabled() -> None:
+    from PySide6 import QtWidgets
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from voxpilot.overlay.overlay_service import OverlayService
+    from voxpilot.app.settings_store import VoiceControlSettings
+    assert VoiceControlSettings().fade_overlay is False  # numbers must never fade unless the user asks
+    ov = OverlayService()
+    ov.show_grid()
+    if ov._canvas is None:
+        pytest.skip("canvas not created without show")
+    ov.set_fade(False, 1, 0.5)
+    ov._fade_now()
+    assert ov._canvas.windowOpacity() == 1.0
+    ov.set_fade(True, 1, 0.5)
+    ov._fade_now()
+    assert abs(ov._canvas.windowOpacity() - 0.5) < 0.05
+    ov.touch()
+    assert ov._canvas.windowOpacity() == 1.0

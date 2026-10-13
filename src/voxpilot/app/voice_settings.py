@@ -76,6 +76,8 @@ class CommandsDialog(QtWidgets.QDialog):
         split = QtWidgets.QSplitter()
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setHeaderHidden(True)
+        self.tree.setTextElideMode(QtCore.Qt.ElideNone)
+        self.tree.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.tree.setAlternatingRowColors(True)
         self.tree.currentItemChanged.connect(self._preview)
         self.preview = QtWidgets.QTextBrowser()
@@ -109,9 +111,11 @@ class CommandsDialog(QtWidgets.QDialog):
             top = QtWidgets.QTreeWidgetItem([cat])
             self.tree.addTopLevelItem(top)
             for phrase, desc in items:
-                it = QtWidgets.QTreeWidgetItem([phrase])
-                it.setData(0, QtCore.Qt.UserRole + 1, desc)
-                top.addChild(it)
+                for single in phrase.split(" / "):  # one row per spoken command, like Apple's list
+                    it = QtWidgets.QTreeWidgetItem([single])
+                    it.setToolTip(0, single)
+                    it.setData(0, QtCore.Qt.UserRole + 1, desc)
+                    top.addChild(it)
         chars = QtWidgets.QTreeWidgetItem(["Dictation and Spelling characters"])
         self.tree.addTopLevelItem(chars)
         for phrase, desc in character_rows():
@@ -276,6 +280,13 @@ class VoiceControlSettingsWindow(QtWidgets.QWidget):
         menu.addAction("Delete All Custom Commands").triggered.connect(self._delete_all)
         adv.setMenu(menu)
         form.addRow("Advanced Actions", adv)
+
+    def showEvent(self, ev) -> None:  # noqa: N802
+        """Reflect what the tray did meanwhile (Stop/Start Listening)."""
+        self.enabled.blockSignals(True)
+        self.enabled.setChecked(self.engine.mode.value != "sleep")
+        self.enabled.blockSignals(False)
+        super().showEvent(ev)
 
     # -- actions -------------------------------------------------------------------------------
     def _set(self, name: str, value) -> None:

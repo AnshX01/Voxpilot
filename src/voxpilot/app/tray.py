@@ -418,15 +418,24 @@ def main() -> int:
 
     logger.info("Initializing VoxPilot Engine...")
     engine = VoxPilotEngine()
-    engine.start(live_mic=not args.no_mic, device_id=args.device)
     from .settings_store import VoiceControlSettings
-    engine.apply_settings(VoiceControlSettings.load())
+    saved = VoiceControlSettings.load()
+    device = args.device
+    if device is None and saved.microphone and saved.microphone != "Automatic":
+        for idx, name in VoxPilotTrayIcon.list_input_devices():
+            if name == saved.microphone:
+                device = idx  # saved Microphone setting, if that device is still present
+                break
+    engine.start(live_mic=not args.no_mic, device_id=device)
+    engine.apply_settings(saved)
 
     def on_exit() -> None:
         logger.info("Shutting down VoxPilot...")
         engine.stop()
 
     tray = VoxPilotTrayIcon(engine=engine, on_exit=on_exit)
+    if device is not None:
+        tray._selected_mic = device
     tray.show()
 
     # Periodic timer to allow Python signal handling (Ctrl+C) in Qt event loop
