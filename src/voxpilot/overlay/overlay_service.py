@@ -579,3 +579,77 @@ class OverlayService(IOverlayService):
             self._canvas.update()
             if self._app:
                 self._app.processEvents()
+
+
+# -----------------------------------------------------------------------------
+# GUI-thread marshalling: Qt widgets may only be touched from the thread that owns
+# them. Speech/command handling runs on worker threads, so every mutating overlay
+# call made from another thread is queued to the GUI thread and waited for.
+# -----------------------------------------------------------------------------
+class _GuiInvoker(QtCore.QObject):
+    call = QtCore.Signal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.call.connect(self._run, QtCore.Qt.QueuedConnection)
+
+    @QtCore.Slot(object)
+    def _run(self, job) -> None:
+        job()
+
+
+def _marshal(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        invoker = getattr(self, "_invoker", None)
+        if invoker is None or threading.get_ident() == self._gui_ident:
+            return fn(self, *args, **kwargs)
+        state = {"claimed": False, "done": threading.Event(), "result": None, "error": None}
+        lock = threading.Lock()
+
+        def job():
+            with lock:
+                if state["claimed"]:
+                    return
+                state["claimed"] = True
+            try:
+                state["result"] = fn(self, *args, **kwargs)
+            except BaseException as exc:  # pragma: no cover
+                state["error"] = exc
+            finally:
+                state["done"].set()
+
+        invoker.call.emit(job)
+        if not state["done"].wait(1.0):
+            with lock:
+                if not state["claimed"]:
+                    # no GUI event loop is running (headless/tests): run inline as before
+                    state["claimed"] = True
+                    return fn(self, *args, **kwargs)
+            state["done"].wait(5.0)
+        if state["error"] is not None:
+            raise state["error"]
+        return state["result"]
+
+    return wrapper
+
+
+_orig_init_qt = OverlayService._init_qt
+
+
+def _init_qt_with_invoker(self) -> None:
+    _orig_init_qt(self)
+    self._gui_ident = threading.get_ident()
+    self._invoker = _GuiInvoker()
+
+
+OverlayService._init_qt = _init_qt_with_invoker
+for _name in (
+    "show_numbers", "show_names", "hide_names", "show_grid", "show_text_numbers",
+    "hide_text_numbers", "show_disambiguation", "show_hud", "hide", "hide_numbers",
+    "hide_grid", "hide_all", "update_hud", "drill_down_grid", "undo_grid",
+):
+    if hasattr(OverlayService, _name):
+        setattr(OverlayService, _name, _marshal(getattr(OverlayService, _name)))

@@ -72,6 +72,48 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         ("Swift Mode", EngineMode.SWIFT),
     )
 
+    _MENU_QSS = """
+    QMenu { background: rgba(244,240,236,245); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
+            padding: 8px 6px; icon-size: 26px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
+    QMenu::item { padding: 6px 22px 6px 10px; border-radius: 6px; margin: 1px 4px; }
+    QMenu::item:selected { background: rgba(10,132,255,255); color: white; }
+    QMenu::item:disabled { color: #8e8a86; }
+    QMenu::separator { height: 1px; background: rgba(0,0,0,30); margin: 6px 14px; }
+    QMenu::indicator { width: 18px; height: 18px; }
+    """
+
+    @staticmethod
+    def _add_header(menu, text: str, title: bool = False):
+        label = QtWidgets.QLabel(text)
+        label.setStyleSheet(
+            "padding: 4px 14px 2px 14px; background: transparent; "
+            + ("font-weight: 700; color: #1d1d1f;" if title else "font-weight: 600; color: #6e6a66;")
+        )
+        wa = QtWidgets.QWidgetAction(menu)
+        wa.setDefaultWidget(label)
+        menu.addAction(wa)
+        return wa
+
+    @staticmethod
+    def _speaker_icon(active: bool) -> QtGui.QIcon:
+        px = QtGui.QPixmap(44, 44)
+        px.fill(QtCore.Qt.transparent)
+        p = QtGui.QPainter(px)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        p.setPen(QtCore.Qt.NoPen)
+        p.setBrush(QtGui.QColor(10, 132, 255) if active else QtGui.QColor(215, 210, 205))
+        p.drawEllipse(2, 2, 40, 40)
+        fg = QtGui.QColor(255, 255, 255) if active else QtGui.QColor(70, 66, 62)
+        p.setBrush(fg)
+        poly = QtGui.QPolygonF([QtCore.QPointF(11, 18), QtCore.QPointF(17, 18), QtCore.QPointF(24, 12),
+                                QtCore.QPointF(24, 32), QtCore.QPointF(17, 26), QtCore.QPointF(11, 26)])
+        p.drawPolygon(poly)
+        p.setBrush(QtCore.Qt.NoBrush)
+        p.setPen(QtGui.QPen(fg, 2.5, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
+        p.drawArc(22, 14, 10, 16, -60 * 16, 120 * 16)
+        p.end()
+        return QtGui.QIcon(px)
+
     @staticmethod
     def _mode_icon(kind: str, active: bool) -> QtGui.QIcon:
         """Round icon like the guide's menu: blue circle when active, grey otherwise."""
@@ -106,15 +148,21 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
     _MODE_ICON_KIND = {EngineMode.DICTATION: "mic", EngineMode.COMMAND: "move",
                        EngineMode.SPELLING: "a", EngineMode.SWIFT: "s"}
 
+    def _refresh_mic_icons(self) -> None:
+        for act in [self.mic_action] + list(getattr(self, "_mic_actions", [])):
+            act.setIcon(self._speaker_icon(act.isChecked()))
+
     def _refresh_mode_icons(self) -> None:
+        if hasattr(self, "mic_action"):
+            self._refresh_mic_icons()
         for mode, act in self.mode_actions.items():
             act.setIcon(self._mode_icon(self._MODE_ICON_KIND[mode], act.isChecked()))
 
     def _create_menu(self) -> None:
         menu = QtWidgets.QMenu()
         self._menu = menu  # keep the Python wrapper alive; setContextMenu doesn't take ownership
-        title = menu.addAction("Voice Control")
-        title.setEnabled(False)
+        menu.setStyleSheet(self._MENU_QSS)
+        self._add_header(menu, "Voice Control", title=True)
         menu.addSeparator()
         self.stop_action = menu.addAction("Stop Listening")
         self.stop_action.triggered.connect(self._stop_listening)
@@ -122,7 +170,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         self.start_action.triggered.connect(self._start_listening)
         self.start_action.setEnabled(False)
         menu.addSeparator()
-        menu.addSection("Mode")
+        self._add_header(menu, "Mode")
         self.mode_group = QtGui.QActionGroup(menu)
         self.mode_actions = {}
         for label, mode in self.MODES:
@@ -135,12 +183,12 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         self.mode_group.triggered.connect(lambda _a: self._refresh_mode_icons())
         self._refresh_mode_icons()
         menu.addSeparator()
-        menu.addSection("Language")
+        self._add_header(menu, "Language")
         lang = menu.addAction("English")
         lang.setCheckable(True)
         lang.setChecked(True)
         menu.addSeparator()
-        menu.addSection("Microphone")
+        self._add_header(menu, "Microphone")
         self.mic_group = QtGui.QActionGroup(menu)
         self.mic_group.setExclusive(True)
         self.mic_action = menu.addAction("Automatic (default microphone)")
@@ -148,6 +196,8 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         self.mic_action.setChecked(True)
         self.mic_action.triggered.connect(lambda _=False: self._select_microphone(None))
         self.mic_group.addAction(self.mic_action)
+        self.mic_group.triggered.connect(lambda _a: self._refresh_mic_icons())
+        self._refresh_mic_icons()
         self._mic_actions = []
         self._selected_mic = None
         menu.aboutToShow.connect(self.refresh_microphones)
@@ -201,6 +251,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
             menu.insertAction(self._mic_anchor, act)
             self._mic_actions.append(act)
         self.mic_action.setChecked(self._selected_mic is None)
+        self._refresh_mic_icons()
 
     def _select_microphone(self, device_id) -> None:
         self._selected_mic = device_id

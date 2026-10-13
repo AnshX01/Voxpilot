@@ -201,3 +201,25 @@ def test_final_transcripts_are_handled_off_the_audio_thread(engine) -> None:
         time.sleep(0.05)
     assert seen and seen[0][1] == "voxpilot-dispatch"
     e.stop()
+
+
+def test_overlay_calls_from_worker_thread_run_on_gui_thread() -> None:
+    """Overlay mutations made off the GUI thread are queued to it (Qt widgets are not thread-safe)."""
+    import threading
+    from PySide6 import QtCore, QtWidgets
+    from voxpilot.overlay.overlay_service import OverlayService
+    ov = OverlayService()
+    gui = threading.get_ident()
+    ran = []
+    orig = ov._canvas.hide
+    ov._canvas.hide = lambda: (ran.append(threading.get_ident()), orig())[1]
+    t = threading.Thread(target=ov.hide_all)
+    t.start()
+    app = QtWidgets.QApplication.instance()
+    import time
+    t0 = time.time()
+    while t.is_alive() and time.time() - t0 < 3:
+        app.processEvents()
+        time.sleep(0.01)
+    t.join()
+    assert ran == [gui]

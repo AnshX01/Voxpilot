@@ -153,6 +153,11 @@ class VoxPilotEngine:
         self.stop_live_capture()
         q = getattr(self, "_dispatch_q", None)
         if q is not None:
+            try:
+                while True:
+                    q.get_nowait()  # drop utterances still pending at shutdown
+            except Exception:
+                pass
             q.put(None)
             self._dispatch_q = None
         self.speech_engine.stop()
