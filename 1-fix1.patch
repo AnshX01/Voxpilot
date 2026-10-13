@@ -1,0 +1,185 @@
+diff --git a/src/voxpilot/engine.py b/src/voxpilot/engine.py
+index 7c02f45..d9f5a2f 100644
+--- a/src/voxpilot/engine.py
++++ b/src/voxpilot/engine.py
+@@ -75,6 +75,7 @@ class VoxPilotEngine:
+         self.is_running = True
+         self.speech_engine.start()
+         self.overlay_service.update_hud(mode=self.mode, text="Ready")
++        threading.Thread(target=self._numbers_refresh_worker, daemon=True).start()
+         if live_mic:
+             self.start_live_capture(device_id=device_id)
+ 
+@@ -98,6 +99,24 @@ class VoxPilotEngine:
+             if chunk:
+                 self.speech_engine.process_audio(chunk)
+ 
++    def _numbers_refresh_worker(self) -> None:
++        """Keep on-screen numbers in step with the screen while they are shown."""
++        last_sig = None
++        while self.is_running:
++            time.sleep(0.6)
++            try:
++                ov = self.overlay_service
++                if not ov.is_numbers_visible() or self.mode == EngineMode.SLEEP:
++                    last_sig = None
++                    continue
++                elements = self.element_provider.discover_elements()
++                sig = tuple((e.name, e.rect.x, e.rect.y, e.rect.width, e.rect.height) for e in elements)
++                if sig != last_sig:
++                    last_sig = sig
++                    ov.show_numbers(elements, continuous=ov.is_continuous_numbers())
++            except Exception:  # pragma: no cover
++                logger.exception("numbers refresh failed")
++
+     def stop_live_capture(self) -> None:
+         if self._live_capture:
+             self._live_capture.stop()
+@@ -164,7 +183,7 @@ class VoxPilotEngine:
+         setter = getattr(se, "set_open_vocabulary", None)
+         if setter:
+             try:
+-                setter(value in (EngineMode.DICTATION, EngineMode.SPELLING, EngineMode.SWIFT))
++                setter(True)
+             except Exception:  # pragma: no cover
+                 logger.exception("could not switch recognizer vocabulary")
+ 
+@@ -602,8 +621,6 @@ class VoxPilotEngine:
+ 
+         cx, cy = element.rect.center()
+         self.input_injector.click_at(cx, cy, button=button, count=count)
+-        if not self.overlay_service.is_continuous_numbers():
+-            self.overlay_service.hide_numbers()
+         self.overlay_service.update_hud(mode=self.mode, text=f"Clicked #{num} ({element.name})")
+ 
+         return CommandResult.success(
+@@ -628,8 +645,6 @@ class VoxPilotEngine:
+             )
+         cx, cy = element.rect.center()
+         self.input_injector.long_press_at(cx, cy, duration_s=1.0)
+-        if not self.overlay_service.is_continuous_numbers():
+-            self.overlay_service.hide_numbers()
+         self.overlay_service.update_hud(mode=self.mode, text=f"Long pressed #{num} ({element.name})")
+         return CommandResult.success(
+             intent=intent,
+@@ -654,8 +669,6 @@ class VoxPilotEngine:
+         x1, y1 = el1.rect.center()
+         x2, y2 = el2.rect.center()
+         self.input_injector.drag_and_drop(x1, y1, x2, y2, duration_s=0.3)
+-        if not self.overlay_service.is_continuous_numbers():
+-            self.overlay_service.hide_numbers()
+         self.overlay_service.update_hud(mode=self.mode, text=f"Dragged #{from_num} to #{to_num}")
+         return CommandResult.success(
+             intent=intent,
+@@ -699,8 +712,6 @@ class VoxPilotEngine:
+ 
+         cx, cy = best_element.rect.center()
+         self.input_injector.click_at(cx, cy)
+-        if not self.overlay_service.is_continuous_numbers():
+-            self.overlay_service.hide_numbers()
+         self.overlay_service.update_hud(mode=self.mode, text=f"Clicked '{best_element.name}'")
+ 
+         return CommandResult.success(
+diff --git a/src/voxpilot/speech/audio_capture.py b/src/voxpilot/speech/audio_capture.py
+index 7b88b49..ac560d2 100644
+--- a/src/voxpilot/speech/audio_capture.py
++++ b/src/voxpilot/speech/audio_capture.py
+@@ -86,22 +86,33 @@ class LiveAudioCapture:
+         target_sr = self.sample_rate
+         block_size = int(native_sr * (self.chunk_duration_ms / 1000.0))
+ 
++        cutoff = 0.45 * target_sr / native_sr  # normalised (cycles/sample) low-pass edge ~7.2 kHz
++        taps_n = 63
++        n = np.arange(taps_n) - (taps_n - 1) / 2.0
++        lp_taps = (2 * cutoff * np.sinc(2 * cutoff * n) * np.hamming(taps_n)).astype(np.float32)
++        lp_taps /= lp_taps.sum()
++        state = {"hist": np.zeros(taps_n - 1, dtype=np.float32), "phase": 0.0}
++
+         def callback(indata, frames, time_info, status):
+             if indata.shape[1] > 1:
+                 mono = indata.mean(axis=1)
+             else:
+                 mono = indata[:, 0]
+ 
+-            # Resample to 16kHz mono if device native sample rate differs
++            # Resample to 16kHz mono with an anti-aliasing low-pass (plain interpolation aliased
++            # speech from 44.1/48 kHz devices and hurt recognition).
+             if native_sr != target_sr:
+-                orig_len = len(mono)
+-                target_len = int(orig_len * (target_sr / float(native_sr)))
++                hist = state["hist"]
++                buf = np.concatenate([hist, mono.astype(np.float32)])
++                filtered = np.convolve(buf, lp_taps, mode="same")[len(hist):]
++                state["hist"] = buf[-(len(lp_taps) - 1):]
++                orig_len = len(filtered)
++                target_len = int(round(orig_len * (target_sr / float(native_sr))))
+                 if orig_len > 1 and target_len > 0:
+-                    mono = np.interp(
+-                        np.linspace(0, orig_len, target_len, endpoint=False),
+-                        np.arange(orig_len),
+-                        mono,
+-                    ).astype(np.float32)
++                    pos = state["phase"] + np.arange(target_len) * (native_sr / float(target_sr))
++                    pos = pos[pos < orig_len - 1]
++                    mono = np.interp(pos, np.arange(orig_len), filtered).astype(np.float32)
++                    state["phase"] = (pos[-1] + native_sr / float(target_sr) - orig_len) if len(pos) else 0.0
+ 
+             pcm_int16 = (mono * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
+             chunk = AudioChunk(
+diff --git a/src/voxpilot/speech/vosk_engine.py b/src/voxpilot/speech/vosk_engine.py
+index d7428eb..accde6f 100644
+--- a/src/voxpilot/speech/vosk_engine.py
++++ b/src/voxpilot/speech/vosk_engine.py
+@@ -69,6 +69,9 @@ class VoskSpeechEngine:
+         self._use_command_grammar = use_command_grammar
+         self._grammar_phrases: Optional[List[str]] = list(BASE_COMMAND_VOCABULARY) if use_command_grammar else None
+         self._sample_rate = 16000
++        # Open vocabulary by default: a closed command grammar turns every non-listed word into [unk],
++        # which made live speech unrecognisable. Commands are matched by the parser on open transcripts.
++        self._open_vocab = True
+         self._words_recognized = 0
+         self._chunks_processed = 0
+ 
+diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
+index 6cf0d93..0bc8c6d 100644
+--- a/tests/test_voice_control_parity.py
++++ b/tests/test_voice_control_parity.py
+@@ -108,13 +108,33 @@ def test_show_commands_context_lists_text_commands_first(engine):
+     assert e.visible_commands[0][0] == "Basic navigation"
+ 
+ 
+-def test_open_vocabulary_for_text_modes_closed_for_command(engine):
++def test_recognizer_is_open_vocabulary_in_every_mode(engine):
++    """Live bug: a closed command grammar turned ordinary speech into [unk]. Never constrain it."""
+     e, _, _ = engine
+     se = e.speech_engine
+-    say(e, "command mode")
+-    se.set_open_vocabulary.assert_called_with(False)
+-    say(e, "dictation mode")
+-    se.set_open_vocabulary.assert_called_with(True)
++    for phrase in ("command mode", "dictation mode"):
++        say(e, phrase)
++        se.set_open_vocabulary.assert_called_with(True)
++
++
++def test_vosk_engine_defaults_to_open_vocabulary(monkeypatch, tmp_path) -> None:
++    from voxpilot.speech import vosk_engine as V
++
++    calls = []
++    monkeypatch.setattr(V.vosk, "Model", lambda path: object())
++
++    class Rec:
++        def __init__(self, *args):
++            calls.append(args)
++
++        def SetWords(self, _):
++            pass
++
++    monkeypatch.setattr(V.vosk, "KaldiRecognizer", Rec)
++    eng = V.VoskSpeechEngine(model_path=str(tmp_path))
++    eng.start()
++    eng.set_grammar(["click ok"])
++    assert all(len(c) == 2 for c in calls), "recognizer must not receive a closed grammar"
+ 
+ 
+ def test_tray_microphone_choice_restarts_capture(monkeypatch) -> None:
