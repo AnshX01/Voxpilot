@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import atexit
 import sys
+import weakref
 import threading
 import time
 from typing import Dict, List, Optional
@@ -32,6 +34,7 @@ from voxpilot.contracts.dto import (
     ScreenRect,
 )
 from voxpilot.contracts.interfaces import IOverlayService
+from voxpilot.overlay.grid_model import GridModel, Rect
 
 logger = logging.getLogger("voxpilot.overlay")
 
@@ -59,7 +62,11 @@ class OverlayCanvas(QtWidgets.QWidget):
         )
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
-        self.setGeometry(0, 0, 1920, 1080)
+        scr = QtWidgets.QApplication.primaryScreen()
+        g = scr.geometry() if scr is not None else QtCore.QRect(0, 0, 1920, 1080)
+        self.setGeometry(g)
+        self.grid_model: Optional[GridModel] = None
+        self.text_items: list = []  # (number, QRect) tuples for text numbers
 
         self.mode: OverlayMode = OverlayMode.OFF
         self.elements: List[LabeledElement] = []
@@ -67,6 +74,7 @@ class OverlayCanvas(QtWidgets.QWidget):
         self.grid_bounds: Optional[ScreenRect] = None
         self.grid_history: List[ScreenRect] = []
         self.grid_cells: int = 3
+        self.grid_badge_cache: dict = {}
 
         # HUD State
         self.hud_text: str = ""
@@ -94,37 +102,74 @@ class OverlayCanvas(QtWidgets.QWidget):
             | WS_EX_TOPMOST,
         )
 
+    # Apple Voice Control badge look (from guide screenshots): warm dark grey
+    # rounded tag, bold white number, small pointer on the right edge.
+    BADGE_BG = QtGui.QColor(74, 70, 66, 238)
+    BADGE_EDGE = QtGui.QColor(255, 255, 255, 70)
+
     def _render_badge_pixmap(
         self,
         text: str,
-        bg_color: QtGui.QColor = QtGui.QColor(22, 24, 28, 235),
+        bg_color: QtGui.QColor = None,
         text_color: QtGui.QColor = QtGui.QColor(255, 255, 255),
-        border_color: QtGui.QColor = QtGui.QColor(255, 255, 255, 90),
+        border_color: QtGui.QColor = None,
+        pointer: bool = True,
     ) -> QtGui.QPixmap:
-        font = QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold)
+        bg_color = bg_color or self.BADGE_BG
+        border_color = border_color or self.BADGE_EDGE
+        font = QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold)
         fm = QtGui.QFontMetrics(font)
         text_w = fm.horizontalAdvance(text)
-        w = max(24, text_w + 14)
-        h = 20
-        pix = QtGui.QPixmap(w, h)
+        body_w = max(26, text_w + 14)
+        tip = 7 if pointer else 0
+        h = 22
+        w = body_w + tip + 2
+        pix = QtGui.QPixmap(w, h + 2)
         pix.fill(QtCore.Qt.transparent)
         p = QtGui.QPainter(pix)
         p.setRenderHint(QtGui.QPainter.Antialiasing)
         p.setFont(font)
-
-        # Subtle drop shadow for crisp legibility over light and dark backgrounds
-        p.setBrush(QtGui.QColor(0, 0, 0, 110))
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(QtCore.QRectF(1, 1, body_w, h - 2), 6, 6)
+        if pointer:
+            tri = QtGui.QPainterPath()
+            tri.moveTo(body_w - 1, h / 2 - 5)
+            tri.lineTo(body_w + tip, h / 2)
+            tri.lineTo(body_w - 1, h / 2 + 5)
+            tri.closeSubpath()
+            path = path.united(tri)
+        p.setBrush(QtGui.QColor(0, 0, 0, 70))
         p.setPen(QtCore.Qt.NoPen)
-        p.drawRoundedRect(1, 2, w - 2, h - 2, 4, 4)
-
-        # Dark high-contrast badge background with 1px silver border
+        p.translate(0, 1.5)
+        p.drawPath(path)
+        p.translate(0, -1.5)
         p.setBrush(bg_color)
         p.setPen(QtGui.QPen(border_color, 1.0))
-        p.drawRoundedRect(0, 0, w - 1, h - 2, 4, 4)
-
-        # Pure white text
+        p.drawPath(path)
         p.setPen(text_color)
-        p.drawText(0, 0, w, h - 2, QtCore.Qt.AlignCenter, text)
+        p.drawText(QtCore.QRect(1, 1, body_w, h - 2), QtCore.Qt.AlignCenter, text)
+        p.end()
+        return pix
+
+    def render_grid_badge(self, text: str, framed: bool) -> QtGui.QPixmap:
+        font = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold)
+        fm = QtGui.QFontMetrics(font)
+        w = max(30, fm.horizontalAdvance(text) + 16)
+        h = 30
+        pix = QtGui.QPixmap(w + 6, h + 6)
+        pix.fill(QtCore.Qt.transparent)
+        p = QtGui.QPainter(pix)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        p.setFont(font)
+        if framed:
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 120), 2.0))
+            p.drawRoundedRect(QtCore.QRectF(1, 1, w + 4, h + 4), 8, 8)
+        p.setBrush(self.BADGE_BG)
+        p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 70), 1.0))
+        p.drawRoundedRect(QtCore.QRectF(3, 3, w, h), 6, 6)
+        p.setPen(QtGui.QColor(255, 255, 255))
+        p.drawText(QtCore.QRect(3, 3, w, h), QtCore.Qt.AlignCenter, text)
         p.end()
         return pix
 
@@ -143,6 +188,12 @@ class OverlayCanvas(QtWidgets.QWidget):
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter: QtGui.QPainter) -> None:
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
 
         # 1. Number Badges Mode (Single-shot or Continuous)
@@ -153,7 +204,7 @@ class OverlayCanvas(QtWidgets.QWidget):
                 if not pix:
                     pix = self._render_badge_pixmap(key)
                     self.badge_cache[key] = pix
-                painter.drawPixmap(el.rect.x, el.rect.y, pix)
+                painter.drawPixmap(max(0, el.rect.x - pix.width() + 4), el.rect.y, pix)
 
         # 2. Name Badges Mode
         elif self.mode == OverlayMode.NAMES:
@@ -177,75 +228,83 @@ class OverlayCanvas(QtWidgets.QWidget):
                     self.disambig_badge_cache[item.badge_label] = pix
                 painter.drawPixmap(item.element.rect.x, item.element.rect.y, pix)
 
-        # 4. Screen Grid Mode
-        if self.mode == OverlayMode.GRID:
-            bounds = self.grid_bounds or ScreenRect(0, 0, 1920, 1080)
-            cell_w = bounds.width / 3.0
-            cell_h = bounds.height / 3.0
-
-            pen = QtGui.QPen(QtGui.QColor(255, 50, 50, 190), 2.0)
-            painter.setPen(pen)
-            font = QtGui.QFont("Segoe UI", 16, QtGui.QFont.Bold)
-            painter.setFont(font)
-
-            num = 1
-            for row in range(3):
-                for col in range(3):
-                    rx = int(bounds.x + col * cell_w)
-                    ry = int(bounds.y + row * cell_h)
-                    rw = int(cell_w)
-                    rh = int(cell_h)
-                    painter.drawRect(rx, ry, rw, rh)
-                    painter.drawText(rx + 12, ry + 32, str(num))
-                    num += 1
-
-        # 5. Floating HUD Toast Pill (macOS-Style Centered at Screen Top)
-        if self.hud_text or self.hud_mode:
-            pill_w = 420
-            pill_h = 36
-            pill_x = max(20, (self.width() - pill_w) // 2)
-            pill_y = 12
-            hud_rect = QtCore.QRect(pill_x, pill_y, pill_w, pill_h)
-
-            # Drop shadow
-            painter.setBrush(QtGui.QColor(0, 0, 0, 90))
+        # 4. Screen Grid Mode (Apple style: thin dark lines, centred framed badges)
+        if self.mode == OverlayMode.GRID and self.grid_model is not None:
+            gm = self.grid_model
+            b = gm.bounds
+            painter.setBrush(QtGui.QColor(0, 0, 0, 18))
             painter.setPen(QtCore.Qt.NoPen)
-            painter.drawRoundedRect(pill_x + 1, pill_y + 2, pill_w, pill_h, 18, 18)
+            painter.drawRect(b.x, b.y, b.w, b.h)
+            painter.setPen(QtGui.QPen(QtGui.QColor(40, 36, 32, 190), 1.0))
+            for c in range(gm.cols + 1):
+                x = b.x + round(c * b.w / gm.cols)
+                painter.drawLine(x, b.y, x, b.y + b.h)
+            for r in range(gm.rows + 1):
+                y = b.y + round(r * b.h / gm.rows)
+                painter.drawLine(b.x, y, b.x + b.w, y)
+            framed = gm.framed()
+            for n in range(1, gm.count + 1):
+                cx, cy = gm.center(n)
+                pix = self.grid_badge_cache.get((n, framed))
+                if pix is None:
+                    pix = self.render_grid_badge(str(n), framed)
+                    self.grid_badge_cache[(n, framed)] = pix
+                painter.drawPixmap(cx - pix.width() // 2, cy - pix.height() // 2, pix)
 
-            # High-contrast dark pill with subtle white border
-            painter.setBrush(QtGui.QColor(22, 24, 28, 235))
-            painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 60), 1))
-            painter.drawRoundedRect(hud_rect, 18, 18)
+        # 4b. Text numbers (next to each line / word / character)
+        if self.mode == OverlayMode.TEXT_NUMBERS:
+            for num, qr in self.text_items:
+                key = str(num)
+                pix = self.badge_cache.get(key) or self._render_badge_pixmap(key)
+                self.badge_cache[key] = pix
+                painter.drawPixmap(max(0, qr.x() - pix.width() - 2), qr.y() + max(0, (qr.height() - pix.height()) // 2), pix)
 
-            # Mic status dot
-            mode_color = QtGui.QColor(0, 230, 130)
-            if self.hud_mode == "DICTATION":
-                mode_color = QtGui.QColor(70, 160, 255)
-            elif self.hud_mode == "SLEEP":
-                mode_color = QtGui.QColor(160, 160, 170)
-
-            painter.setBrush(mode_color)
-            painter.setPen(QtCore.Qt.NoPen)
-            painter.drawEllipse(pill_x + 14, pill_y + 11, 14, 14)
-
-            # Mode indicator text
-            painter.setPen(mode_color)
-            font_mode = QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold)
-            painter.setFont(font_mode)
-            painter.drawText(pill_x + 36, pill_y + 23, f"{self.hud_mode}")
-
-            # Message text
-            msg_color = QtGui.QColor(245, 245, 245)
-            if self.hud_level == "warning":
-                msg_color = QtGui.QColor(255, 200, 60)
-            elif self.hud_level == "error":
-                msg_color = QtGui.QColor(255, 80, 80)
-
-            painter.setPen(msg_color)
-            font_msg = QtGui.QFont("Segoe UI", 9)
+        # 5. Recognised-command pill (Apple: small light italic pill under the menu bar)
+        if self.hud_text:
+            font_msg = QtGui.QFont("Segoe UI", 10)
+            font_msg.setItalic(True)
             painter.setFont(font_msg)
-            display_msg = self.hud_text[:36] if self.hud_text else "Listening..."
-            painter.drawText(pill_x + 135, pill_y + 23, display_msg)
+            fm = QtGui.QFontMetrics(font_msg)
+            msg = self.hud_text[:48]
+            pw = fm.horizontalAdvance(msg) + 24
+            ph = 26
+            px = max(20, self.width() // 2 - pw - 60)
+            py = 44
+            painter.setBrush(QtGui.QColor(0, 0, 0, 50))
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.drawRoundedRect(px, py + 2, pw, ph, 7, 7)
+            painter.setBrush(QtGui.QColor(236, 232, 228, 245))
+            painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 25), 1))
+            painter.drawRoundedRect(px, py, pw, ph, 7, 7)
+            col = QtGui.QColor(60, 56, 52)
+            if self.hud_level == "error":
+                col = QtGui.QColor(170, 40, 40)
+            painter.setPen(col)
+            painter.drawText(QtCore.QRect(px, py, pw, ph), QtCore.Qt.AlignCenter, msg)
+
+
+_LIVE_CANVASES: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def _shutdown_canvases() -> None:
+    # Destroy overlay widgets before interpreter finalisation (avoids PySide teardown crash).
+    for c in list(_LIVE_CANVASES):
+        try:
+            c.hide()
+            for name in ("badge_cache", "name_badge_cache", "disambig_badge_cache", "grid_badge_cache"):
+                getattr(c, name).clear()
+            c.deleteLater()
+        except Exception:
+            pass
+    app = QtWidgets.QApplication.instance()
+    if app is not None:
+        try:
+            app.processEvents()
+        except Exception:
+            pass
+
+
+atexit.register(_shutdown_canvases)
 
 
 class OverlayService(IOverlayService):
@@ -264,6 +323,7 @@ class OverlayService(IOverlayService):
         else:
             self._app = QtWidgets.QApplication.instance()
         self._canvas = OverlayCanvas()
+        _LIVE_CANVASES.add(self._canvas)
 
     # -------------------------------------------------------------------------
     # IOverlayService Contract Implementation
@@ -319,19 +379,40 @@ class OverlayService(IOverlayService):
         sub_rect: Optional[ScreenRect] = None,
         cells: int = 3,
     ) -> None:
-        """Render a 3x3 numbered mouse navigation grid across screen or sub-rectangle."""
+        """Show the Apple-style numbered grid (7x4 on screen, 5x5 per drill-down)."""
         if self._canvas:
             if sub_rect is not None:
-                self._canvas.grid_bounds = sub_rect
-            elif self._canvas.grid_bounds is None:
-                self._canvas.grid_bounds = ScreenRect(0, 0, 1920, 1080)
-            self._canvas.grid_cells = cells
+                r = Rect(int(sub_rect.x), int(sub_rect.y), int(sub_rect.width), int(sub_rect.height))
+            else:
+                g = self._canvas.geometry()
+                r = Rect(0, 0, g.width(), g.height())
+            self._canvas.grid_model = GridModel(r)
+            self._canvas.grid_bounds = ScreenRect(r.x, r.y, r.w, r.h)
             self._canvas.mode = OverlayMode.GRID
             self._current_mode = OverlayMode.GRID
             self._canvas.show()
             self._canvas.update()
             if self._app:
                 self._app.processEvents()
+
+    def show_text_numbers(self, items: list) -> None:
+        """Badge numbers beside each text item. items: objects with .number and .rect (x,y,w,h) or None."""
+        if not self._canvas:
+            return
+        self._canvas.text_items = [
+            (it.number, QtCore.QRect(*it.rect)) for it in items if getattr(it, "rect", None)
+        ]
+        self._canvas.mode = OverlayMode.TEXT_NUMBERS
+        self._current_mode = OverlayMode.TEXT_NUMBERS
+        self._canvas.show()
+        self._canvas.update()
+        if self._app:
+            self._app.processEvents()
+
+    def hide_text_numbers(self) -> None:
+        if self._current_mode == OverlayMode.TEXT_NUMBERS:
+            self._canvas.text_items = []
+            self.hide()
 
     def show_disambiguation(
         self,
@@ -370,6 +451,8 @@ class OverlayService(IOverlayService):
             self._current_mode = OverlayMode.OFF
             self._canvas.grid_bounds = None
             self._canvas.grid_history.clear()
+            self._canvas.grid_model = None
+            self._canvas.text_items = []
             self._canvas.elements.clear()
             self._canvas.disambiguation_items.clear()
             self._canvas.hide()
@@ -389,58 +472,42 @@ class OverlayService(IOverlayService):
     # -------------------------------------------------------------------------
 
     def drill_down_grid(self, cell_num: int) -> Optional[ScreenRect]:
-        """Subdivide the active grid cell (1-9) into a recursive 3x3 sub-grid."""
-        if self._current_mode != OverlayMode.GRID or not self._canvas:
+        """Drill into a grid cell: shows a 5x5 grid there. None if the area can't be drilled further."""
+        if self._current_mode != OverlayMode.GRID or not self._canvas or not self._canvas.grid_model:
             return None
-
-        current = self._canvas.grid_bounds or ScreenRect(0, 0, 1920, 1080)
-        if not (1 <= cell_num <= 9):
+        gm = self._canvas.grid_model
+        if not gm.drill(cell_num):
             return None
-
-        # Record history for undo
-        self._canvas.grid_history.append(current)
-
-        row = (cell_num - 1) // 3
-        col = (cell_num - 1) % 3
-        cw = max(9.0, current.width / 3.0)
-        ch = max(9.0, current.height / 3.0)
-
-        new_rect = ScreenRect(
-            x=int(current.x + col * (current.width / 3.0)),
-            y=int(current.y + row * (current.height / 3.0)),
-            width=int(cw),
-            height=int(ch),
-        )
-        self._canvas.grid_bounds = new_rect
+        bnd = gm.bounds
+        self._canvas.grid_bounds = ScreenRect(bnd.x, bnd.y, bnd.w, bnd.h)
         self._canvas.update()
         if self._app:
             self._app.processEvents()
-        return new_rect
+        return self._canvas.grid_bounds
 
     def undo_grid(self) -> Optional[ScreenRect]:
         """Step back up one level in the grid drill-down hierarchy."""
-        if not self._canvas or not self._canvas.grid_history:
+        if not self._canvas or not self._canvas.grid_model or not self._canvas.grid_model.undo():
             return None
-
-        previous = self._canvas.grid_history.pop()
-        self._canvas.grid_bounds = previous
+        bnd = self._canvas.grid_model.bounds
+        self._canvas.grid_bounds = ScreenRect(bnd.x, bnd.y, bnd.w, bnd.h)
         self._canvas.update()
         if self._app:
             self._app.processEvents()
-        return previous
+        return self._canvas.grid_bounds
+
+    def can_drill_grid(self, cell_num: int) -> bool:
+        gm = self._canvas.grid_model if self._canvas else None
+        return bool(gm and gm.can_drill(cell_num))
+
+    def grid_cell_count(self) -> int:
+        gm = self._canvas.grid_model if self._canvas else None
+        return gm.count if gm else 0
 
     def get_grid_cell_center(self, cell_num: int) -> Optional[tuple[int, int]]:
-        """Compute the screen center coordinates of cell (1-9) in active grid."""
-        if not self._canvas or not (1 <= cell_num <= 9):
-            return None
-        current = self._canvas.grid_bounds or ScreenRect(0, 0, 1920, 1080)
-        row = (cell_num - 1) // 3
-        col = (cell_num - 1) % 3
-        cw = current.width / 3.0
-        ch = current.height / 3.0
-        cx = int(current.x + col * cw + cw / 2.0)
-        cy = int(current.y + row * ch + ch / 2.0)
-        return (cx, cy)
+        """Screen centre of a cell in the active grid."""
+        gm = self._canvas.grid_model if self._canvas else None
+        return gm.center(cell_num) if gm else None
 
     # -------------------------------------------------------------------------
     # Backward Compatibility Aliases for Engine & Tests

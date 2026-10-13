@@ -19,6 +19,8 @@ class EngineMode(str, Enum):
 
     COMMAND = "command"
     DICTATION = "dictation"
+    SPELLING = "spelling"
+    SWIFT = "swift"
     SLEEP = "sleep"
     PAUSED = "paused"
 
@@ -56,6 +58,7 @@ class OverlayMode(str, Enum):
     NAMES = "names"
     GRID = "grid"
     DISAMBIGUATION = "disambiguation"
+    TEXT_NUMBERS = "text_numbers"
 
 
 class ActionType(str, Enum):

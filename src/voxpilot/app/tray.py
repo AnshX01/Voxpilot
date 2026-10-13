@@ -63,61 +63,142 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         self.setIcon(QtGui.QIcon(pixmap))
         self.setToolTip("VoxPilot Voice Control (Active)")
 
+    # Apple Voice Control menu (guide screenshot): Voice Control / Stop Listening, Start Listening /
+    # Mode: Dictation, Command, Spelling, Swift / Language: English / Microphone / Voice Control Settings...
+    MODES = (
+        ("Dictation Mode", EngineMode.DICTATION),
+        ("Command Mode", EngineMode.COMMAND),
+        ("Spelling Mode", EngineMode.SPELLING),
+        ("Swift Mode", EngineMode.SWIFT),
+    )
+
     def _create_menu(self) -> None:
-        """Build right-click context menu."""
         menu = QtWidgets.QMenu()
-
-        # Status item
-        self.status_action = menu.addAction("Status: Listening")
-        self.status_action.setEnabled(False)
+        self._menu = menu  # keep the Python wrapper alive; setContextMenu doesn't take ownership
+        title = menu.addAction("Voice Control")
+        title.setEnabled(False)
         menu.addSeparator()
-
-        # Mode toggles
-        self.listening_action = menu.addAction("Sleep (Stop Listening)")
-        self.listening_action.triggered.connect(self._toggle_listening)
-
-        self.dictation_action = menu.addAction("Switch to Dictation Mode")
-        self.dictation_action.triggered.connect(self._toggle_dictation)
-
+        self.stop_action = menu.addAction("Stop Listening")
+        self.stop_action.triggered.connect(self._stop_listening)
+        self.start_action = menu.addAction("Start Listening")
+        self.start_action.triggered.connect(self._start_listening)
+        self.start_action.setEnabled(False)
         menu.addSeparator()
-
-        # Overlay toggles
-        self.numbers_action = menu.addAction("Show Numbers")
-        self.numbers_action.triggered.connect(self._toggle_numbers)
-
-        self.grid_action = menu.addAction("Show Grid")
-        self.grid_action.triggered.connect(self._toggle_grid)
-
+        menu.addSection("Mode")
+        self.mode_group = QtGui.QActionGroup(menu)
+        self.mode_actions = {}
+        for label, mode in self.MODES:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setActionGroup(self.mode_group)
+            act.triggered.connect(lambda _=False, m=mode: self._set_mode(m))
+            self.mode_actions[mode] = act
+        self.mode_actions[EngineMode.DICTATION].setChecked(True)
         menu.addSeparator()
-
-        # Exit action
-        exit_action = menu.addAction("Exit VoxPilot")
+        menu.addSection("Language")
+        lang = menu.addAction("English")
+        lang.setCheckable(True)
+        lang.setChecked(True)
+        menu.addSeparator()
+        menu.addSection("Microphone")
+        self.mic_group = QtGui.QActionGroup(menu)
+        self.mic_group.setExclusive(True)
+        self.mic_action = menu.addAction("Automatic (default microphone)")
+        self.mic_action.setCheckable(True)
+        self.mic_action.setChecked(True)
+        self.mic_action.triggered.connect(lambda _=False: self._select_microphone(None))
+        self.mic_group.addAction(self.mic_action)
+        self._mic_actions = []
+        self._selected_mic = None
+        menu.aboutToShow.connect(self.refresh_microphones)
+        self._mic_anchor = menu.addSeparator()
+        self.settings_action = menu.addAction("Voice Control Settings...")
+        self.settings_action.triggered.connect(self._open_commands_window)
+        menu.addSeparator()
+        exit_action = menu.addAction("Quit VoxPilot")
         exit_action.triggered.connect(self._handle_exit)
-
+        # kept for API compatibility (not shown in the Apple-style menu)
+        self.status_action = QtGui.QAction("Status: Listening", self)
+        self.listening_action = self.stop_action
+        self.dictation_action = self.mode_actions[EngineMode.DICTATION]
+        self.numbers_action = QtGui.QAction("Show Numbers", self)
+        self.grid_action = QtGui.QAction("Show Grid", self)
         self.setContextMenu(menu)
+
+    def _set_mode(self, mode: EngineMode) -> None:
+        self.engine.mode = mode
+        self.mode_actions[mode].setChecked(True)
+        self.engine.overlay_service.update_hud(mode=mode, text=dict((m, l) for l, m in self.MODES)[mode])
+
+    @staticmethod
+    def list_input_devices() -> list:
+        """Return [(device_index, name)] of distinct input devices (empty if unavailable)."""
+        try:
+            import sounddevice as sd
+            seen, out = set(), []
+            for idx, dev in enumerate(sd.query_devices()):
+                name = str(dev.get("name", "")).strip()
+                if dev.get("max_input_channels", 0) > 0 and name and name not in seen:
+                    seen.add(name)
+                    out.append((idx, name))
+            return out
+        except Exception:
+            return []
+
+    def refresh_microphones(self) -> None:
+        menu = self._menu
+        for act in self._mic_actions:
+            menu.removeAction(act)
+            self.mic_group.removeAction(act)
+        self._mic_actions = []
+        for idx, name in self.list_input_devices():
+            act = QtGui.QAction(name, menu)
+            act.setCheckable(True)
+            act.setChecked(self._selected_mic == idx)
+            act.triggered.connect(lambda _=False, i=idx: self._select_microphone(i))
+            self.mic_group.addAction(act)
+            menu.insertAction(self._mic_anchor, act)
+            self._mic_actions.append(act)
+        self.mic_action.setChecked(self._selected_mic is None)
+
+    def _select_microphone(self, device_id) -> None:
+        self._selected_mic = device_id
+        try:
+            self.engine.stop_live_capture()
+            self.engine.start_live_capture(device_id=device_id)
+        except Exception:
+            pass
+
+    def _stop_listening(self) -> None:
+        self._prior_mode = self.engine.mode
+        self.engine.mode = EngineMode.SLEEP
+        self.stop_action.setEnabled(False)
+        self.start_action.setEnabled(True)
+        self.engine.overlay_service.hide_all()
+        self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Stop listening")
+
+    def _start_listening(self) -> None:
+        self.engine.mode = getattr(self, "_prior_mode", EngineMode.DICTATION)
+        if self.engine.mode == EngineMode.SLEEP:
+            self.engine.mode = EngineMode.DICTATION
+        self.stop_action.setEnabled(True)
+        self.start_action.setEnabled(False)
+        self.mode_actions.get(self.engine.mode, self.mode_actions[EngineMode.DICTATION]).setChecked(True)
+        self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Start listening")
+
+    def _open_commands_window(self) -> None:
+        from .commands_window import CommandsWindow
+        self._cmd_window = CommandsWindow(self.engine)
+        self._cmd_window.show()
 
     def _toggle_listening(self) -> None:
         if self.engine.mode == EngineMode.SLEEP:
-            self.engine.mode = EngineMode.COMMAND
-            self.listening_action.setText("Sleep (Stop Listening)")
-            self.status_action.setText("Status: Listening")
-            self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Listening")
+            self._start_listening()
         else:
-            self.engine.mode = EngineMode.SLEEP
-            self.listening_action.setText("Wake Up (Start Listening)")
-            self.status_action.setText("Status: Sleeping")
-            self.engine.overlay_service.hide_all()
-            self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Sleeping")
+            self._stop_listening()
 
     def _toggle_dictation(self) -> None:
-        if self.engine.mode == EngineMode.DICTATION:
-            self.engine.mode = EngineMode.COMMAND
-            self.dictation_action.setText("Switch to Dictation Mode")
-            self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Command Mode")
-        else:
-            self.engine.mode = EngineMode.DICTATION
-            self.dictation_action.setText("Switch to Command Mode")
-            self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Dictation Mode")
+        self._set_mode(EngineMode.COMMAND if self.engine.mode == EngineMode.DICTATION else EngineMode.DICTATION)
 
     def _toggle_numbers(self) -> None:
         if self.engine.overlay_service.is_numbers_visible():

@@ -26,6 +26,7 @@ from voxpilot.commands import CommandParser, NumberParser
 from voxpilot.automation import UiaElementProvider
 from voxpilot.overlay import OverlayService
 from voxpilot.input import WindowsInputInjector
+from voxpilot.dictation.dictation_service import DictationService
 
 user32 = ctypes.windll.user32
 logger = logging.getLogger("VoxPilot")
@@ -47,7 +48,19 @@ class VoxPilotEngine:
         self.overlay_service = overlay_service or OverlayService()
         self.input_injector = input_injector or WindowsInputInjector()
 
-        self.mode = EngineMode.COMMAND
+        try:
+            from voxpilot.automation.context_service import ContextService
+            _ctx = ContextService()
+        except Exception:
+            _ctx = None
+        self.dictation_service = DictationService(self.input_injector, context_service=_ctx)
+        from voxpilot.textnav import TextNumbering, SwiftFormatter
+        from voxpilot.automation.text_target import FocusedTextTarget
+        self.text_numbering = TextNumbering(FocusedTextTarget())
+        self.swift_formatter = SwiftFormatter()
+        self._mode = EngineMode.DICTATION
+        # Voice Control starts in Dictation mode (Apple guide: "Dictation mode is on by default").
+        self.mode = EngineMode.DICTATION
         self.is_running = False
         self._last_result: Optional[CommandResult] = None
         self._history: List[CommandResult] = []
@@ -123,24 +136,118 @@ class VoxPilotEngine:
 
         logger.info(f"Final transcript: '{text}' in mode {self.mode}")
 
-        if self.mode == EngineMode.DICTATION:
-            # Check if user spoke a mode-switching or wake/sleep command
-            intent = self.command_parser.parse(text)
-            if intent and intent.name in ("SWITCH_TO_COMMAND_MODE", "STOP_DICTATION", "GO_TO_SLEEP", "WAKE_UP"):
-                self.dispatch_intent(intent)
-                return
-
-            # Otherwise, type the dictated text with natural spacing
-            self.input_injector.type_text(text + " ")
-            self.overlay_service.update_hud(mode=self.mode, text=f"Typed: {text}")
+        if self.mode in (EngineMode.DICTATION, EngineMode.SPELLING, EngineMode.SWIFT):
+            self._handle_text_entry(text)
             return
 
         # In COMMAND Mode:
+        tres = self._try_text_number_command(text)
+        if tres is not None:
+            self._record_result(tres)
+            return
         res = self.process_text_command(text)
         # If it was casual conversation (NO_MATCH), take zero action and do not pop up errors
         if res.status == CommandStatus.NO_MATCH:
             logger.debug(f"Filtered non-command utterance: '{text}'")
             return
+
+    _TEXT_OPS = r"(delete|uppercase|lowercase|capitalize|select)"
+
+    @property
+    def mode(self) -> EngineMode:
+        return self._mode
+
+    @mode.setter
+    def mode(self, value: EngineMode) -> None:
+        self._mode = value
+        se = getattr(self, "speech_engine", None)
+        setter = getattr(se, "set_open_vocabulary", None)
+        if setter:
+            try:
+                setter(value in (EngineMode.DICTATION, EngineMode.SPELLING, EngineMode.SWIFT))
+            except Exception:  # pragma: no cover
+                logger.exception("could not switch recognizer vocabulary")
+
+    def _handle_show_text_numbers(self, intent: Intent) -> CommandResult:
+        items = self.text_numbering.show()
+        if not items:
+            self.text_numbering.hide()
+            return CommandResult.error(exception=RuntimeError("no text input area focused"),
+                                       message="No text input area with text to number")
+        self._paint_text_numbers()
+        return CommandResult.success(intent=intent, message=f"Text numbers shown ({len(items)})")
+
+    def _paint_text_numbers(self) -> None:
+        show = getattr(self.overlay_service, "show_text_numbers", None)
+        if not show:
+            return
+        from dataclasses import replace
+        rects = getattr(self.text_numbering.target, "item_rects", None)
+        items = self.text_numbering.items
+        if rects:
+            try:
+                rs = rects(items)
+                items = [replace(it, rect=r) for it, r in zip(items, rs)]
+            except Exception:
+                pass
+        show(items)
+
+    def _try_text_number_command(self, text: str) -> Optional[CommandResult]:
+        """'<delete|uppercase|lowercase|capitalize|select> <n>' while text numbers are shown."""
+        import re
+        from voxpilot.commands.number_parser import NumberParser
+        if not self.text_numbering.visible:
+            return None
+        m = re.match(r"^" + self._TEXT_OPS + r"\s+(.+)$", text.strip().lower())
+        if not m:
+            return None
+        n = NumberParser.parse_number_phrase(m.group(2))
+        if n is None:
+            return None
+        op = m.group(1)
+        tn = self.text_numbering
+        if op == "select":
+            ok = tn.select(n)
+        else:
+            it = tn.get(n)
+            ok = bool(it) and tn.apply(op, n)
+            if ok:
+                new = tn.transform(op, it.text)
+                if op == "delete":
+                    self.input_injector.key_press("delete")
+                else:
+                    self.input_injector.type_unicode(new)
+                tn.level = "line"
+                tn.refresh()
+        if not ok:
+            return CommandResult.error(exception=ValueError(f"no text item {n}"), message=f"No text item {n}")
+        self._paint_text_numbers()
+        return CommandResult.success(message=f"{op} {n}")
+
+    def _handle_text_entry(self, text: str) -> None:
+        res = self._try_text_number_command(text)
+        if res is not None:
+            self._record_result(res)
+            return
+        """Dictation/Spelling/Swift: commands win, anything else is entered as text."""
+        svc = self.dictation_service
+        svc.set_active(True)
+        svc.set_spelling_mode(self.mode == EngineMode.SPELLING)
+        if svc.editing_engine.is_editing_command(text):
+            svc.execute_editing_command(text)
+            return
+        intent = self.command_parser.parse(text)
+        if intent:
+            self.process_text_command(text)
+            return
+        if self.mode == EngineMode.SWIFT:
+            if not svc.verify_focus_target():
+                return
+            code = self.swift_formatter.format(text)
+            if code:
+                self.input_injector.type_unicode(code)
+            return
+        svc.handle_burst(TranscriptEvent(text=text, is_final=True))
 
     def dispatch_intent(self, intent: Intent) -> CommandResult:
         name = intent.name
@@ -149,7 +256,7 @@ class VoxPilotEngine:
         if self.mode == EngineMode.SLEEP and name != "WAKE_UP":
             return CommandResult.blocked(
                 reason=BlockedReason.SECURE_DESKTOP,
-                message="VoxPilot is asleep. Say 'wake up' to resume listening.",
+                message="Voice Control is paused. Say 'Start listening' to resume.",
             )
 
         if name == "SHOW_NUMBERS":
@@ -210,6 +317,20 @@ class VoxPilotEngine:
             self.mode = EngineMode.DICTATION
             self.overlay_service.update_hud(mode=self.mode, text="Dictation Active")
             return CommandResult.success(intent=intent, message="Switched to Dictation mode")
+        elif name == "SHOW_TEXT_NUMBERS":
+            return self._handle_show_text_numbers(intent)
+        elif name == "HIDE_TEXT_NUMBERS":
+            self.text_numbering.hide()
+            self.overlay_service.hide_text_numbers() if hasattr(self.overlay_service, "hide_text_numbers") else None
+            return CommandResult.success(intent=intent, message="Text numbers hidden")
+        elif name == "SWITCH_TO_SPELLING_MODE":
+            self.mode = EngineMode.SPELLING
+            self.overlay_service.update_hud(mode=self.mode, text="Spelling Mode Active")
+            return CommandResult.success(intent=intent, message="Switched to Spelling mode")
+        elif name == "SWITCH_TO_SWIFT_MODE":
+            self.mode = EngineMode.SWIFT
+            self.overlay_service.update_hud(mode=self.mode, text="Swift Mode Active")
+            return CommandResult.success(intent=intent, message="Switched to Swift mode")
         elif name == "SHOW_GRID":
             self.overlay_service.show_grid()
             self.overlay_service.update_hud(mode=self.mode, text="Grid Visible")
@@ -252,9 +373,12 @@ class VoxPilotEngine:
             self.overlay_service.update_hud(mode=self.mode, text="Command Mode Active")
             return CommandResult.success(intent=intent, message="Switched to Command mode")
         elif name == "SHOW_COMMANDS":
-            help_summary = "Voice Commands: show numbers, click <n>, double click <n>, triple click <n>, long press <n>, drag <n> to <m>, scroll down, dictation mode, sleep"
-            self.overlay_service.show_hud(help_summary, duration_ms=5000)
-            self.overlay_service.update_hud(mode=self.mode, text="Showing Commands")
+            from voxpilot.app.command_catalog import commands_for_context
+            ctx = "text" if self.mode in (EngineMode.DICTATION, EngineMode.SPELLING, EngineMode.SWIFT) else "general"
+            self.visible_commands = commands_for_context(ctx)
+            show = getattr(self.overlay_service, "show_commands_window", None)
+            if show:
+                show(self.visible_commands)
             return CommandResult.success(intent=intent, message="Displayed voice commands")
         elif name == "HIDE_COMMANDS":
             self.overlay_service.hide()
@@ -431,17 +555,28 @@ class VoxPilotEngine:
                 matched_intent=intent,
             )
 
-        # Check if screen grid is active and number is 1-9
-        if self.overlay_service.is_grid_visible() and 1 <= num <= 9:
-            coords = self.overlay_service.get_grid_cell_center(num)
-            if coords:
-                self.input_injector.click_at(coords[0], coords[1], button, count)
-                self.overlay_service.hide_grid()
-                return CommandResult.success(
-                    intent=intent,
-                    message=f"Clicked grid cell {num}",
-                    details={"x": coords[0], "y": coords[1]},
-                )
+        # Screen grid active: a bare number drills in (or clicks when it can't drill further);
+        # "click <n>" etc. act at the cell centre and the grid then disappears (Apple guide).
+        if self.overlay_service.is_grid_visible():
+            cell_total = getattr(self.overlay_service, "grid_cell_count", lambda: 9)()
+            if not isinstance(cell_total, int):
+                cell_total = 9
+            if 1 <= num <= cell_total:
+                bare = (intent.raw_text or "").strip().lower().split()
+                is_bare = len(bare) <= 1 or bare[0] in ("grid",)
+                can = getattr(self.overlay_service, "can_drill_grid", lambda n: False)(num)
+                if is_bare and can and button == MouseButton.LEFT and count == 1:
+                    self.overlay_service.drill_down_grid(num)
+                    return CommandResult.success(intent=intent, message=f"Drilled into grid cell {num}")
+                coords = self.overlay_service.get_grid_cell_center(num)
+                if coords:
+                    self.input_injector.click_at(coords[0], coords[1], button, count)
+                    self.overlay_service.hide_grid()
+                    return CommandResult.success(
+                        intent=intent,
+                        message=f"Clicked grid cell {num}",
+                        details={"x": coords[0], "y": coords[1]},
+                    )
 
         element = self.element_provider.get_element_by_id(num)
         if not element:
@@ -644,4 +779,9 @@ class VoxPilotEngine:
 
     def _record_result(self, res: CommandResult) -> None:
         self._last_result = res
+        for cb in list(getattr(self, "result_listeners", [])):
+            try:
+                cb(res)
+            except Exception:  # pragma: no cover
+                pass
         self._history.append(res)

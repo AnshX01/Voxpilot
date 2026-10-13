@@ -16,6 +16,8 @@ from typing import Any, Optional
 # NATO Phonetic Alphabet mapping
 NATO_PHONETIC = {
     "alpha": "a",
+    "alfa": "a",
+    "juliett": "j",
     "bravo": "b",
     "charlie": "c",
     "delta": "d",
@@ -219,6 +221,22 @@ class FormattingEngine:
     def __init__(self) -> None:
         self.all_caps_active: bool = False
         self.sentence_start: bool = True
+
+    def phonetic_command(self, command: str) -> str:
+        """Spelling mode: "Replace Charlie Alfa Tango with Delta Oscar Golf" -> "replace cat with dog"."""
+        import re as _re
+        m = _re.match(r"^(replace|select)\s+(.+?)(?:\s+with\s+(.+))?$", command.strip(), _re.I)
+        if not m:
+            return command
+
+        def conv(part: str) -> str:
+            toks = part.lower().split()
+            if toks and all(t in NATO_PHONETIC for t in toks):
+                return "".join(NATO_PHONETIC[t] for t in toks)
+            return part
+
+        verb, a, b = m.group(1).lower(), conv(m.group(2)), m.group(3)
+        return f"{verb} {a} with {conv(b)}" if b else f"{verb} {a}"
 
     def reset_state(self) -> None:
         """Reset ongoing sentence and casing state."""

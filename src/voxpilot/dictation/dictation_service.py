@@ -106,6 +106,8 @@ class DictationService(IDictationService):
     def execute_editing_command(self, command: str) -> CommandResult:
         """Execute spoken text editing directives (e.g. 'delete last word', 'select all')."""
         last_len = self._history[-1].char_count if self._history else 0
+        if self._spelling_mode:
+            command = self.formatting_engine.phonetic_command(command)
         result = self.editing_engine.execute_command(command, last_burst_len=last_len)
         if result.status == CommandStatus.SUCCESS:
             cmd_lower = command.lower().strip()

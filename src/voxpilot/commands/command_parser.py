@@ -18,6 +18,8 @@ class CommandParser:
 
     def _init_builtins(self) -> None:
         self.builtins: List[Dict[str, Any]] = [
+            {"intent": "SHOW_TEXT_NUMBERS", "patterns": [r"^show\s+text\s+numbers?$"]},
+            {"intent": "HIDE_TEXT_NUMBERS", "patterns": [r"^hide\s+text\s+numbers?$"]},
             {"intent": "SHOW_NUMBERS", "patterns": [
                 r"^(?:please\s+)?(?:show|display)\s+numbers?(?:\s+everywhere)?$",
                 r"^(?:sure|shore|so)\s+numbers?$",
@@ -41,6 +43,8 @@ class CommandParser:
             {"intent": "UNMUTE", "patterns": [r"^unmute(?:\s+microphone)?$"]},
             {"intent": "SWITCH_TO_COMMAND_MODE", "patterns": [r"^(?:switch\s+to\s+)?command\s+mode$", r"^stop\s+dictation$"]},
             {"intent": "SWITCH_TO_DICTATION_MODE", "patterns": [r"^(?:switch\s+to\s+)?dictation\s+mode$", r"^start\s+dictation$", r"^dictate$"]},
+            {"intent": "SWITCH_TO_SPELLING_MODE", "patterns": [r"^(?:switch\s+to\s+)?spelling\s+mode$"]},
+            {"intent": "SWITCH_TO_SWIFT_MODE", "patterns": [r"^(?:switch\s+to\s+)?swift\s+mode$"]},
             {"intent": "START_DICTATION", "patterns": [r"^start\s+dictation$", r"^dictate$", r"^dictation\s+mode$"]},
             {"intent": "STOP_DICTATION", "patterns": [r"^stop\s+dictation$", r"^command\s+mode$"]},
             {"intent": "PRESS_ENTER", "patterns": [r"^press\s+enter$", r"^hit\s+enter$", r"^enter$"]},
@@ -238,7 +242,7 @@ class CommandParser:
         if m_drill:
             target_str = m_drill.group(1).strip()
             num = self.normalize_number(target_str)
-            if num is not None and 1 <= num <= 9:
+            if num is not None and 1 <= num <= 99:
                 return Intent(name="DRILL_DOWN_GRID", confidence=0.98, slots={"cell": num}, raw_text=text)
 
         # Check key repeat e.g. "press down 5 times", "press tab 3 times"

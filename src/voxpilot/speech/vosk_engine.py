@@ -77,8 +77,16 @@ class VoskSpeechEngine:
         self._reinit_recognizer()
         self._is_running = True
 
+    def set_open_vocabulary(self, open_vocab: bool) -> None:
+        """Dictation/Spelling/Swift need open vocabulary; Command mode uses the closed command grammar."""
+        if getattr(self, "_open_vocab", False) == open_vocab:
+            return
+        self._open_vocab = open_vocab
+        if self._is_running:
+            self._reinit_recognizer()
+
     def _reinit_recognizer(self) -> None:
-        if self._grammar_phrases:
+        if self._grammar_phrases and not getattr(self, "_open_vocab", False):
             # Construct distinct vocabulary with [unk] token for unconstrained non-command speech filtering
             vocab = sorted(list({p.lower().strip() for p in self._grammar_phrases if p.strip()}))
             grammar_json = json.dumps(vocab + ["[unk]"])

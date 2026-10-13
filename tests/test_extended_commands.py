@@ -170,6 +170,7 @@ def test_engine_extended_intent_execution() -> None:
     # Grid cell click
     mock_overlay.is_grid_visible.return_value = True
     mock_overlay.get_grid_cell_center.return_value = (960, 540)
+    mock_overlay.can_drill_grid.return_value = False  # area can't be drilled further: a number clicks
     mock_input.reset_mock()
     res = engine.execute_intent(Intent(name="CLICK_NUMBER", slots={"number": 5}, raw_text="5"))
     assert res.status == CommandStatus.SUCCESS

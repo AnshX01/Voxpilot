@@ -357,5 +357,5 @@ def test_macos_extended_engine_dispatch() -> None:
     # 9. Show commands
     res_cmds = engine.dispatch_intent(Intent(name="SHOW_COMMANDS"))
     assert res_cmds.status == CommandStatus.SUCCESS
-    mock_overlay.show_hud.assert_called_once()
+    assert engine.visible_commands  # Apple-style Commands window list replaces the HUD text dump
 

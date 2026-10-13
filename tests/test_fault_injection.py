@@ -218,7 +218,7 @@ def test_corrupt_and_truncated_audio_chunk():
 
 
 def test_invalid_and_out_of_bounds_grid_operations():
-    """Verify that invalid grid operations (e.g. cell out of 1-9 bounds) are rejected."""
+    """Verify that invalid grid operations (e.g. cell out of the 1-28 top-level bounds) are rejected."""
     from voxpilot.overlay.overlay_service import OverlayService
 
     overlay = OverlayService()
@@ -226,10 +226,10 @@ def test_invalid_and_out_of_bounds_grid_operations():
 
     # Valid drill down returns new ScreenRect
     assert overlay.drill_down_grid(5) is not None
-    # Invalid cell 0 (only 1-9 allowed) returns None
+    # Invalid cell 0 returns None
     assert overlay.drill_down_grid(0) is None
-    # Invalid cell 15 returns None
-    assert overlay.drill_down_grid(15) is None
+    # Invalid cell 29 (top-level grid is 7x4 = 28 cells) returns None
+    assert overlay.drill_down_grid(29) is None
 
     # Undo returns previous ScreenRect
     assert overlay.undo_grid() is not None

@@ -107,21 +107,25 @@ def test_adversarial_grid_extreme_drill_down() -> None:
     overlay = OverlayService()
     overlay.show_grid()
 
-    # Drill down 10 levels deep
+    # Apple grid: drilling stops once an area can't be drilled further (then a number clicks)
+    depth = 0
     for _ in range(10):
-        rect = overlay.drill_down_grid(5)
-        assert rect is not None
+        rect = overlay.drill_down_grid(13)
+        if rect is None:
+            break
+        depth += 1
         assert rect.width >= 1
         assert rect.height >= 1
+    assert 1 <= depth < 10
 
     # Coordinates must remain valid finite numbers
-    coords = overlay.get_grid_cell_center(5)
+    coords = overlay.get_grid_cell_center(13)
     assert coords is not None
     assert 0 <= coords[0] <= 1920
     assert 0 <= coords[1] <= 1080
 
-    # Step back up 10 times
-    for _ in range(10):
+    # Step back up as many times as we drilled
+    for _ in range(depth):
         popped = overlay.undo_grid()
         assert popped is not None
 
@@ -134,7 +138,7 @@ def test_adversarial_grid_invalid_cell_indices() -> None:
     overlay = OverlayService()
     overlay.show_grid()
 
-    for invalid_cell in [0, 10, -1, 999, -50]:
+    for invalid_cell in [0, 29, -1, 999, -50]:
         assert overlay.drill_down_grid(invalid_cell) is None
         assert overlay.get_grid_cell_center(invalid_cell) is None
 
