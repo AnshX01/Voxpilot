@@ -174,3 +174,30 @@ def test_numbers_refresh_follows_the_screen(engine) -> None:
     e.element_provider.discover_elements = lambda *a, **k: [el(1, 99)]
     e._refresh_numbers()
     assert shown == [[5], [99]]
+
+
+def test_final_transcripts_are_handled_off_the_audio_thread(engine) -> None:
+    """A slow command must not block the thread feeding audio (continuous listening)."""
+    import threading, time
+    from voxpilot.contracts.dto import TranscriptEvent
+    e, _, _ = engine
+    e.is_running = True
+    seen = []
+    gate = threading.Event()
+
+    def slow(ev):
+        gate.wait(2)
+        seen.append((ev.text, threading.current_thread().name))
+
+    e._handle_final_event = slow
+    e._start_dispatch_worker()
+    t0 = time.perf_counter()
+    e._on_transcript(TranscriptEvent(text="hello world", is_final=True))
+    assert time.perf_counter() - t0 < 0.5  # returned immediately while handler is blocked
+    gate.set()
+    for _ in range(40):
+        if seen:
+            break
+        time.sleep(0.05)
+    assert seen and seen[0][1] == "voxpilot-dispatch"
+    e.stop()

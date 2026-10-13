@@ -86,6 +86,7 @@ class VoxPilotEngine:
         try:
             self._live_capture = LiveAudioCapture()
             self._live_capture.start(device_id=device_id)
+            self._start_dispatch_worker()
             self._capture_thread = threading.Thread(target=self._capture_worker, daemon=True)
             self._capture_thread.start()
             logger.info("Live microphone capture started successfully.")
@@ -94,6 +95,27 @@ class VoxPilotEngine:
             logger.warning(f"Could not start live microphone capture: {exc}")
             self._live_capture = None
             return False
+
+    def _start_dispatch_worker(self) -> None:
+        """Run command/dictation handling off the audio thread so mic capture never stalls
+        while a click, UIA scan or text injection is in progress (keeps listening continuous)."""
+        import queue as _q
+        if getattr(self, "_dispatch_thread", None) and self._dispatch_thread.is_alive():
+            return
+        self._dispatch_q = _q.Queue()
+
+        def work() -> None:
+            while True:
+                ev = self._dispatch_q.get()
+                if ev is None:
+                    return
+                try:
+                    self._handle_final_event(ev)
+                except Exception:  # pragma: no cover
+                    logger.exception("transcript handling failed")
+
+        self._dispatch_thread = threading.Thread(target=work, daemon=True, name="voxpilot-dispatch")
+        self._dispatch_thread.start()
 
     def _capture_worker(self) -> None:
         while self.is_running and self._live_capture and self._live_capture.is_running:
@@ -129,6 +151,10 @@ class VoxPilotEngine:
     def stop(self) -> None:
         self.is_running = False
         self.stop_live_capture()
+        q = getattr(self, "_dispatch_q", None)
+        if q is not None:
+            q.put(None)
+            self._dispatch_q = None
         self.speech_engine.stop()
         stopper = getattr(self.overlay_service, "stop_refresh", None)
         if callable(stopper):
@@ -156,6 +182,13 @@ class VoxPilotEngine:
             self.overlay_service.update_hud(mode=self.mode, text=event.text)
             return
 
+        q = getattr(self, "_dispatch_q", None)
+        if q is not None and getattr(self, "_dispatch_thread", None) and self._dispatch_thread.is_alive():
+            q.put(event)
+            return
+        self._handle_final_event(event)
+
+    def _handle_final_event(self, event: TranscriptEvent) -> None:
         text = event.text.strip()
         if not text or text == "[unk]":
             return

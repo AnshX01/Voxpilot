@@ -72,6 +72,44 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         ("Swift Mode", EngineMode.SWIFT),
     )
 
+    @staticmethod
+    def _mode_icon(kind: str, active: bool) -> QtGui.QIcon:
+        """Round icon like the guide's menu: blue circle when active, grey otherwise."""
+        px = QtGui.QPixmap(44, 44)
+        px.fill(QtCore.Qt.transparent)
+        p = QtGui.QPainter(px)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        p.setPen(QtCore.Qt.NoPen)
+        p.setBrush(QtGui.QColor(10, 132, 255) if active else QtGui.QColor(215, 210, 205))
+        p.drawEllipse(2, 2, 40, 40)
+        fg = QtGui.QColor(255, 255, 255) if active else QtGui.QColor(70, 66, 62)
+        p.setPen(QtGui.QPen(fg, 3, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
+        if kind == "mic":
+            p.setBrush(fg)
+            p.drawRoundedRect(18, 9, 8, 17, 4, 4)
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.drawArc(13, 14, 18, 17, 180 * 16, 180 * 16)
+            p.drawLine(22, 31, 22, 36)
+        elif kind == "move":
+            for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                p.drawLine(22, 22, 22 + dx * 12, 22 + dy * 12)
+                ex, ey = 22 + dx * 12, 22 + dy * 12
+                p.drawLine(ex, ey, ex - dx * 4 + dy * 4, ey - dy * 4 + dx * 4)
+                p.drawLine(ex, ey, ex - dx * 4 - dy * 4, ey - dy * 4 - dx * 4)
+        else:
+            f = QtGui.QFont("Segoe UI", 17, QtGui.QFont.Bold)
+            p.setFont(f)
+            p.drawText(QtCore.QRect(0, 0, 44, 44), QtCore.Qt.AlignCenter, "A" if kind == "a" else "S")
+        p.end()
+        return QtGui.QIcon(px)
+
+    _MODE_ICON_KIND = {EngineMode.DICTATION: "mic", EngineMode.COMMAND: "move",
+                       EngineMode.SPELLING: "a", EngineMode.SWIFT: "s"}
+
+    def _refresh_mode_icons(self) -> None:
+        for mode, act in self.mode_actions.items():
+            act.setIcon(self._mode_icon(self._MODE_ICON_KIND[mode], act.isChecked()))
+
     def _create_menu(self) -> None:
         menu = QtWidgets.QMenu()
         self._menu = menu  # keep the Python wrapper alive; setContextMenu doesn't take ownership
@@ -94,6 +132,8 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
             act.triggered.connect(lambda _=False, m=mode: self._set_mode(m))
             self.mode_actions[mode] = act
         self.mode_actions[EngineMode.DICTATION].setChecked(True)
+        self.mode_group.triggered.connect(lambda _a: self._refresh_mode_icons())
+        self._refresh_mode_icons()
         menu.addSeparator()
         menu.addSection("Language")
         lang = menu.addAction("English")
@@ -128,6 +168,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
     def _set_mode(self, mode: EngineMode) -> None:
         self.engine.mode = mode
         self.mode_actions[mode].setChecked(True)
+        self._refresh_mode_icons()
         self.engine.overlay_service.update_hud(mode=mode, text=dict((m, l) for l, m in self.MODES)[mode])
 
     @staticmethod
@@ -184,6 +225,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
         self.stop_action.setEnabled(True)
         self.start_action.setEnabled(False)
         self.mode_actions.get(self.engine.mode, self.mode_actions[EngineMode.DICTATION]).setChecked(True)
+        self._refresh_mode_icons()
         self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Start listening")
 
     def _open_commands_window(self) -> None:
