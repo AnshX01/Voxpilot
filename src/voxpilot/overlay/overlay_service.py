@@ -152,10 +152,10 @@ class OverlayCanvas(QtWidgets.QWidget):
         return pix
 
     def render_grid_badge(self, text: str, framed: bool) -> QtGui.QPixmap:
-        font = QtGui.QFont("Segoe UI", 12, QtGui.QFont.Bold)
+        font = QtGui.QFont("Segoe UI", 10, QtGui.QFont.Bold)
         fm = QtGui.QFontMetrics(font)
-        w = max(30, fm.horizontalAdvance(text) + 16)
-        h = 30
+        w = max(24, fm.horizontalAdvance(text) + 12)
+        h = 20
         pix = QtGui.QPixmap(w + 6, h + 6)
         pix.fill(QtCore.Qt.transparent)
         p = QtGui.QPainter(pix)
@@ -232,9 +232,6 @@ class OverlayCanvas(QtWidgets.QWidget):
         if self.mode == OverlayMode.GRID and self.grid_model is not None:
             gm = self.grid_model
             b = gm.bounds
-            painter.setBrush(QtGui.QColor(0, 0, 0, 18))
-            painter.setPen(QtCore.Qt.NoPen)
-            painter.drawRect(b.x, b.y, b.w, b.h)
             painter.setPen(QtGui.QPen(QtGui.QColor(40, 36, 32, 190), 1.0))
             for c in range(gm.cols + 1):
                 x = b.x + round(c * b.w / gm.cols)
@@ -538,6 +535,19 @@ class OverlayService(IOverlayService):
             except Exception:
                 pass
 
+    def show_commands_window(self, rows) -> None:
+        """Show the floating Commands palette (voice command "Show commands")."""
+        from voxpilot.app.commands_window import CommandsWindow
+        self.hide_commands_window()
+        self._commands_window = CommandsWindow(rows=list(rows))
+        self._commands_window.show()
+
+    def hide_commands_window(self) -> None:
+        win = getattr(self, "_commands_window", None)
+        if win is not None:
+            win.close()
+            self._commands_window = None
+
     def hide_numbers(self) -> None:
         self._is_continuous_numbers = False
         if self._current_mode in (OverlayMode.NUMBERS, OverlayMode.CONTINUOUS_NUMBERS):
@@ -657,6 +667,7 @@ for _name in (
     "show_numbers", "show_names", "hide_names", "show_grid", "show_text_numbers",
     "hide_text_numbers", "show_disambiguation", "show_hud", "hide", "hide_numbers",
     "hide_grid", "hide_all", "update_hud", "drill_down_grid", "undo_grid",
+    "show_commands_window", "hide_commands_window",
 ):
     if hasattr(OverlayService, _name):
         setattr(OverlayService, _name, _marshal(getattr(OverlayService, _name)))

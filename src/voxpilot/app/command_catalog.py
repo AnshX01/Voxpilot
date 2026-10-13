@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 CATALOG: Dict[str, List[Tuple[str, str]]] = {
-    "Basic navigation": [
+    "Basic Navigation": [
         ("Open <app name>", "Open an app, e.g. Open Mail"),
         ("Scroll up / Scroll down", "Scroll the active window"),
         ("Click <item name or number>", "Click an item, e.g. Click Done"),
@@ -43,5 +43,5 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
 
 def commands_for_context(ctx: str) -> List[Tuple[str, str, str]]:
     """Return (category, phrase, description) rows; text-editing first when typing."""
-    order = ["Text editing", "Modes", "Overlays", "Basic navigation"] if ctx == "text" else list(CATALOG)
+    order = ["Text editing", "Modes", "Overlays", "Basic Navigation"] if ctx == "text" else list(CATALOG)
     return [(cat, phrase, desc) for cat in order for phrase, desc in CATALOG[cat]]

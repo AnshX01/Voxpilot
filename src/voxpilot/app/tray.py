@@ -295,8 +295,10 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
 
     def _open_commands_window(self) -> None:
         from .commands_window import CommandsWindow
-        self._cmd_window = CommandsWindow(self.engine)
-        self._cmd_window.show()
+        shower = getattr(self.engine.overlay_service, "show_commands_window", None)
+        if shower:
+            from .command_catalog import commands_for_context
+            shower(commands_for_context("general"))
 
     def _toggle_listening(self) -> None:
         if self.engine.mode == EngineMode.SLEEP:

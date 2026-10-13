@@ -1,7 +1,7 @@
 """Voice Control Commands window and interactive tutorial (Qt)."""
 from __future__ import annotations
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from .command_catalog import commands_for_context
 
@@ -16,32 +16,53 @@ TUTORIAL_STEPS = [
 
 
 class CommandsWindow(QtWidgets.QWidget):
-    def __init__(self, engine, parent=None) -> None:
+    """Small floating "Commands" palette like the guide: grey title, collapsible category,
+    one column of phrases with alternating rows. It never takes keyboard focus, so the app
+    you are dictating into stays active."""
+
+    def __init__(self, engine=None, parent=None, rows=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Voice Control Commands")
-        self.resize(900, 560)
+        self.setWindowTitle("Commands")
+        self.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint)
+        self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+        self.resize(290, 390)
         lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
         self.tree = QtWidgets.QTreeWidget()
-        self.tree.setHeaderLabels(["Command", "What it does"])
+        self.tree.setHeaderHidden(True)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.tree.setIndentation(10)
+        self.tree.setFrameShape(QtWidgets.QFrame.NoFrame)
+        font = self.tree.font()
+        font.setPointSizeF(9.0)
+        self.tree.setFont(font)
+        self.tree.setStyleSheet(
+            "QTreeWidget { background: #f4f2f0; alternate-background-color: #e9e6e3; color: #1d1d1f; }"
+            "QTreeWidget::item { padding: 1px 4px; }"
+        )
         lay.addWidget(self.tree)
-        btn = QtWidgets.QPushButton("Open Tutorial")
-        btn.clicked.connect(lambda: Tutorial(engine, self).show())
-        lay.addWidget(btn)
-        ctx = "text" if engine.mode.value in ("dictation", "spelling", "swift") else "general"
+        if rows is None:
+            ctx = "general"
+            if engine is not None and engine.mode.value in ("dictation", "spelling", "swift"):
+                ctx = "text"
+            rows = commands_for_context(ctx)
         cats = {}
-        for cat, phrase, desc in commands_for_context(ctx):
+        for cat, phrase, desc in rows:
             top = cats.get(cat)
             if top is None:
                 top = QtWidgets.QTreeWidgetItem([cat])
+                f = top.font(0)
+                f.setBold(True)
+                top.setFont(0, f)
+                top.setForeground(0, QtGui.QBrush(QtGui.QColor(110, 106, 102)))
                 self.tree.addTopLevelItem(top)
                 cats[cat] = top
-            top.addChild(QtWidgets.QTreeWidgetItem([phrase, desc]))
-        self.tree.expandAll()
-        self.tree.setWordWrap(True)
+            child = QtWidgets.QTreeWidgetItem([phrase])
+            child.setToolTip(0, desc)
+            top.addChild(child)
+        self.tree.expandItem(self.tree.topLevelItem(0))
         self.tree.setTextElideMode(QtCore.Qt.ElideNone)
-        self.tree.header().setStretchLastSection(True)
-        self.tree.resizeColumnToContents(0)
-        self.tree.setColumnWidth(0, max(self.tree.columnWidth(0), 330))
 
 
 class Tutorial(QtWidgets.QDialog):

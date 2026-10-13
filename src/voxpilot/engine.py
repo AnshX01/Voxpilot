@@ -455,6 +455,9 @@ class VoxPilotEngine:
                 show(self.visible_commands)
             return CommandResult.success(intent=intent, message="Displayed voice commands")
         elif name == "HIDE_COMMANDS":
+            hider = getattr(self.overlay_service, "hide_commands_window", None)
+            if hider:
+                hider()
             self.overlay_service.hide()
             self.overlay_service.update_hud(mode=self.mode, text="Commands Hidden")
             return CommandResult.success(intent=intent, message="Commands hidden")

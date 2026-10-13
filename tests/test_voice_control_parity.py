@@ -105,7 +105,7 @@ def test_show_commands_context_lists_text_commands_first(engine):
     assert e.visible_commands[0][0] == "Text editing"
     say(e, "command mode")
     say(e, "show commands")
-    assert e.visible_commands[0][0] == "Basic navigation"
+    assert e.visible_commands[0][0] == "Basic Navigation"
 
 
 def test_recognizer_is_open_vocabulary_in_every_mode(engine):
@@ -300,3 +300,18 @@ def test_mic_test_command_reports_levels(tmp_path, monkeypatch, capsys) -> None:
     out = capsys.readouterr().out
     assert "Peak level: 0.3" in out
     assert (tmp_path / "voxpilot-mic-test.txt").exists()
+
+
+def test_show_commands_opens_real_palette_and_hide_closes_it() -> None:
+    from PySide6 import QtWidgets
+    from voxpilot.overlay.overlay_service import OverlayService
+    from voxpilot.app.command_catalog import commands_for_context
+    ov = OverlayService()
+    ov.show_commands_window(commands_for_context("general"))
+    win = ov._commands_window
+    assert win.isVisible() and win.windowTitle() == "Commands"
+    assert win.tree.topLevelItem(0).text(0) == "Basic Navigation"
+    assert win.tree.topLevelItem(0).child(0).text(0).startswith("Open")
+    ov.hide_commands_window()
+    QtWidgets.QApplication.instance().processEvents()
+    assert not win.isVisible()
