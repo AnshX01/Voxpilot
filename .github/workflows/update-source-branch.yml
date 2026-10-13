@@ -1,4 +1,4 @@
-# run 13
+# run 14
 name: update-source-branch
 on:
   push:
@@ -20,193 +20,1253 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply fix13 (inline patch)
+      - name: Apply fix14 (inline patch)
         shell: bash
         run: |
-          cat > vehicle/fix13.patch <<'PATCH_EOF'
-          diff --git a/src/voxpilot/app/command_catalog.py b/src/voxpilot/app/command_catalog.py
-          index a3cc292..cc4ad34 100644
-          --- a/src/voxpilot/app/command_catalog.py
-          +++ b/src/voxpilot/app/command_catalog.py
-          @@ -17,6 +17,11 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
-                   ("Stop listening / Start listening", "Pause or resume Voice Control"),
-                   ("Show commands", "List available commands"),
-                   ("Open Voice Control Tutorial", "Practise essential commands"),
-          +        ("Open document / Save document / New item", "Ctrl+O / Ctrl+S / Ctrl+N"),
-          +        ("Next app / Previous app", "Alt+Tab / Alt+Shift+Tab"),
-          +        ("Quit application / Hide application", "Alt+F4 / minimise"),
-          +        ("Show keyboard / Hide keyboard", "Windows on-screen keyboard"),
-          +        ("Repeat <n> times", "Repeat the previous command"),
-               ],
-               "Overlays": [
-                   ("Show names / Hide names", "Label items with their names"),
-          @@ -42,7 +47,24 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
-           }
-
-
-          +def character_rows() -> List[Tuple[str, str]]:
-          +    """What to say for each character in Dictation / Spelling mode (guide: Commands > Dictation mode)."""
-          +    from voxpilot.dictation.formatting import NATO_PHONETIC, PUNCTUATION_PHRASES
-          +    rows: List[Tuple[str, str]] = []
-          +    seen = set()
-          +    for phrase, ch in PUNCTUATION_PHRASES:
-          +        if phrase not in seen:
-          +            seen.add(phrase)
-          +            shown = {"\n": "new line", "\n\n": "new paragraph"}.get(ch, ch)
-          +            rows.append((f"{phrase}  =  {shown}", "Say this to enter the character"))
-          +    for word, ch in sorted(NATO_PHONETIC.items()):
-          +        rows.append((f"{word}  =  {ch}", "Spelling mode code word"))
-          +    return rows
+          cat > vehicle/fix14.patch <<'PATCH_EOF'
+          diff --git a/src/voxpilot/app/commands_window.py b/src/voxpilot/app/commands_window.py
+          index 2d708b5..c198fa9 100644
+          --- a/src/voxpilot/app/commands_window.py
+          +++ b/src/voxpilot/app/commands_window.py
+          @@ -109,42 +109,3 @@ class Tutorial(QtWidgets.QDialog):
+                   if self.step < len(TUTORIAL_STEPS) and name == TUTORIAL_STEPS[self.step][1]:
+                       self.step += 1
+                       self._render()
+          -
+          -
+          -class SettingsWindow(QtWidgets.QWidget):
+          -    """Voice Control settings. The guide (mh40719) points to this page only for "Open Tutorial" and
+          -    "Commands" (the full command list, including the characters Dictation/Spelling mode accept).
+          -    Language and microphone live in the menu, as in the guide's menu screenshot."""
+          -
+          -    def __init__(self, engine, show_commands, parent=None) -> None:
+          -        super().__init__(parent)
+          -        self.setWindowTitle("Voice Control")
+          -        self.engine = engine
+          -        lay = QtWidgets.QVBoxLayout(self)
+          -        lay.setContentsMargins(20, 16, 20, 16)
+          -        lay.setSpacing(10)
+          -        t = QtWidgets.QLabel("Voice Control")
+          -        f = t.font()
+          -        f.setPointSizeF(13.0)
+          -        f.setBold(True)
+          -        t.setFont(f)
+          -        lay.addWidget(t)
+          -        row = QtWidgets.QHBoxLayout()
+          -        row.addWidget(QtWidgets.QLabel("Tutorial"))
+          -        row.addStretch(1)
+          -        b1 = QtWidgets.QPushButton("Open Tutorial...")
+          -        b1.clicked.connect(lambda: self._open_tutorial())
+          -        row.addWidget(b1)
+          -        lay.addLayout(row)
+          -        row2 = QtWidgets.QHBoxLayout()
+          -        row2.addWidget(QtWidgets.QLabel("Commands"))
+          -        row2.addStretch(1)
+          -        b2 = QtWidgets.QPushButton("Commands...")
+          -        b2.clicked.connect(lambda: show_commands())
+          -        row2.addWidget(b2)
+          -        lay.addLayout(row2)
+          -        self.resize(380, 140)
+          -
+          -    def _open_tutorial(self) -> None:
+          -        self._tutorial = Tutorial(self.engine, self)
+          -        self._tutorial.show()
+          diff --git a/src/voxpilot/app/settings_store.py b/src/voxpilot/app/settings_store.py
+          new file mode 100644
+          index 0000000..506b2da
+          --- /dev/null
+          +++ b/src/voxpilot/app/settings_store.py
+          @@ -0,0 +1,82 @@
+          +"""Voice Control settings (the options on Apple's "Change Voice Control settings" page).
+          +
+          +Persisted as JSON in %APPDATA%\\VoxPilot\\settings.json (or ~/.voxpilot/settings.json). Nothing is read or
+          +written until `load()` / `save()` is called, so tests and the CLI never touch user files by accident.
+          +"""
+          +from __future__ import annotations
+          +
+          +import json
+          +import os
+          +from dataclasses import asdict, dataclass, field
+          +from typing import Any, Dict, List
+          +
+          +OVERLAY_CHOICES = ("None", "Item names", "Item numbers", "Numbered grid")
+          +ACTION_TYPES = ("Insert text", "Press keyboard shortcut", "Open URL", "Open app")
           +
           +
-           def commands_for_context(ctx: str) -> List[Tuple[str, str, str]]:
-               """Return (category, phrase, description) rows; text-editing first when typing."""
-               order = ["Text editing", "Modes", "Overlays", "Basic Navigation"] if ctx == "text" else list(CATALOG)
-          -    return [(cat, phrase, desc) for cat in order for phrase, desc in CATALOG[cat]]
-          +    rows = [(cat, phrase, desc) for cat in order for phrase, desc in CATALOG[cat]]
-          +    rows += [("Dictation and Spelling characters", p, d) for p, d in character_rows()]
-          +    return rows
+          +def default_path() -> str:
+          +    base = os.environ.get("VOXPILOT_SETTINGS_DIR") or os.path.join(
+          +        os.environ.get("APPDATA") or os.path.expanduser("~"), "VoxPilot" if os.environ.get("APPDATA") else ".voxpilot"
+          +    )
+          +    return os.path.join(base, "settings.json")
+          +
+          +
+          +@dataclass
+          +class VoiceControlSettings:
+          +    language: str = "English"
+          +    microphone: str = "Automatic"          # "Automatic" or a device name
+          +    show_hints: bool = True                 # "Show hints"
+          +    play_sound: bool = False                # "Play sound when command is recognized"
+          +    overlay: str = "None"                   # "Overlay": None / Item names / Item numbers / Numbered grid
+          +    fade_overlay: bool = False              # "Fade overlay after inactivity"
+          +    fade_after_seconds: int = 5
+          +    fade_amount: float = 0.5                # how far the overlay dims (0..1)
+          +    vocabulary: List[str] = field(default_factory=list)
+          +    # custom commands: {"when_i_say": str, "action": one of ACTION_TYPES, "value": str}
+          +    custom_commands: List[Dict[str, Any]] = field(default_factory=list)
+          +
+          +    def to_json(self) -> str:
+          +        return json.dumps(asdict(self), indent=2)
+          +
+          +    @classmethod
+          +    def from_dict(cls, data: Dict[str, Any]) -> "VoiceControlSettings":
+          +        s = cls()
+          +        for k, v in (data or {}).items():
+          +            if hasattr(s, k):
+          +                setattr(s, k, v)
+          +        if s.overlay not in OVERLAY_CHOICES:
+          +            s.overlay = "None"
+          +        return s
+          +
+          +    @classmethod
+          +    def load(cls, path: str | None = None) -> "VoiceControlSettings":
+          +        try:
+          +            with open(path or default_path(), "r", encoding="utf-8") as fh:
+          +                return cls.from_dict(json.load(fh))
+          +        except (OSError, ValueError):
+          +            return cls()
+          +
+          +    def save(self, path: str | None = None) -> str:
+          +        p = path or default_path()
+          +        os.makedirs(os.path.dirname(p), exist_ok=True)
+          +        with open(p, "w", encoding="utf-8") as fh:
+          +            fh.write(self.to_json())
+          +        return p
+          +
+          +
+          +def export_custom_commands(settings: VoiceControlSettings, path: str) -> None:
+          +    with open(path, "w", encoding="utf-8") as fh:
+          +        json.dump({"voxpilot_custom_commands": settings.custom_commands}, fh, indent=2)
+          +
+          +
+          +def import_custom_commands(settings: VoiceControlSettings, path: str) -> int:
+          +    with open(path, "r", encoding="utf-8") as fh:
+          +        data = json.load(fh)
+          +    items = data.get("voxpilot_custom_commands", []) if isinstance(data, dict) else []
+          +    n = 0
+          +    for it in items:
+          +        if isinstance(it, dict) and it.get("when_i_say") and it.get("action") in ACTION_TYPES:
+          +            settings.custom_commands.append({"when_i_say": str(it["when_i_say"]), "action": it["action"],
+          +                                             "value": str(it.get("value", ""))})
+          +            n += 1
+          +    return n
+          diff --git a/src/voxpilot/app/tray.py b/src/voxpilot/app/tray.py
+          index 17f8613..bcf523b 100644
+          --- a/src/voxpilot/app/tray.py
+          +++ b/src/voxpilot/app/tray.py
+          @@ -14,6 +14,53 @@ from ..contracts.dto import EngineMode
+           logger = logging.getLogger("voxpilot.app.tray")
+           
+           
+          +class _FlatMenuAction(QtWidgets.QWidgetAction):
+          +    """Plain menu row (no icon column) so its text sits flush with the section headers, like macOS."""
+          +
+          +    def __init__(self, text: str, menu: QtWidgets.QMenu) -> None:
+          +        super().__init__(menu)
+          +        self._text = text
+          +        self._menu = menu
+          +        self._label = QtWidgets.QLabel(text)
+          +        self._label.setMouseTracking(True)
+          +        self._label.installEventFilter(self)
+          +        self._hover = False
+          +        self.setDefaultWidget(self._label)
+          +        self.changed.connect(self._restyle)
+          +        self._restyle()
+          +
+          +    def _restyle(self) -> None:
+          +        if not self.isEnabled():
+          +            fg, bg = "#8e8a86", "transparent"
+          +        elif self._hover:
+          +            fg, bg = "white", "rgb(10,132,255)"
+          +        else:
+          +            fg, bg = "#1d1d1f", "transparent"
+          +        self._label.setStyleSheet(f"padding: 3px 26px 3px 0px; margin: 1px 6px 1px 3px; border-radius: 6px; "
+          +                                  f"background: {bg}; color: {fg}; font-size: 10.5pt; font-family: 'Segoe UI';")
+          +
+          +    def eventFilter(self, obj, ev):  # noqa: N802
+          +        t = ev.type()
+          +        if t == QtCore.QEvent.Enter:
+          +            self._hover = True
+          +            self._restyle()
+          +        elif t == QtCore.QEvent.Leave:
+          +            self._hover = False
+          +            self._restyle()
+          +        elif t == QtCore.QEvent.MouseButtonRelease and self.isEnabled():
+          +            self._menu.close()
+          +            self.trigger()
+          +            return True
+          +        return False
+          +
+          +
+          +
+          +def _add_flat(menu, text):
+          +    act = _FlatMenuAction(text, menu)
+          +    menu.addAction(act)
+          +    return act
+          +
+          +
+           class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+               """System tray icon and menu for VoxPilot."""
+           
+          @@ -86,7 +133,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+               def _add_header(menu, text: str, title: bool = False):
+                   label = QtWidgets.QLabel(text)
+                   label.setStyleSheet(
+          -            "padding: 4px 14px 2px 14px; background: transparent; font-size: 10.5pt; "
+          +            "padding: 4px 8px 2px 3px; background: transparent; font-size: 10.5pt; "
+                       + ("font-weight: 700; font-size: 11pt; color: #1d1d1f;" if title else "font-weight: 600; color: #8a8681;")
+                   )
+                   wa = QtWidgets.QWidgetAction(menu)
+          @@ -178,9 +225,9 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                   menu.setStyleSheet(self._MENU_QSS)
+                   self._add_header(menu, "Voice Control", title=True)
+                   menu.addSeparator()
+          -        self.stop_action = menu.addAction("Stop Listening")
+          +        self.stop_action = _add_flat(menu, "Stop Listening")
+                   self.stop_action.triggered.connect(self._stop_listening)
+          -        self.start_action = menu.addAction("Start Listening")
+          +        self.start_action = _add_flat(menu, "Start Listening")
+                   self.start_action.triggered.connect(self._start_listening)
+                   self.start_action.setEnabled(False)
+                   menu.addSeparator()
+          @@ -216,10 +263,10 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                   self._selected_mic = None
+                   menu.aboutToShow.connect(self.refresh_microphones)
+                   self._mic_anchor = menu.addSeparator()
+          -        self.settings_action = menu.addAction("Voice Control Settings...")
+          +        self.settings_action = _add_flat(menu, "Voice Control Settings...")
+                   self.settings_action.triggered.connect(self._open_commands_window)
+                   menu.addSeparator()
+          -        exit_action = menu.addAction("Quit VoxPilot")
+          +        exit_action = _add_flat(menu, "Quit VoxPilot")
+                   exit_action.triggered.connect(self._handle_exit)
+                   # kept for API compatibility (not shown in the Apple-style menu)
+                   self.status_action = QtGui.QAction("Status: Listening", self)
+          @@ -294,15 +341,24 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                   self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Start listening")
+           
+               def _open_commands_window(self) -> None:
+          -        """Voice Control Settings...: the guide's settings page offers Open Tutorial and Commands."""
+          -        from .commands_window import SettingsWindow
+          -        from .command_catalog import CATALOG
+          -
+          -        def show_all_commands() -> None:
+          -            rows = [(c, p, d) for c, items in CATALOG.items() for p, d in items]
+          -            self.engine.overlay_service.show_commands_window(rows)
+          -
+          -        self._cmd_window = SettingsWindow(self.engine, show_all_commands)
+          +        """Voice Control Settings...: Apple's settings page (language, microphone, hints, overlay, commands, vocabulary...)."""
+          +        from .voice_settings import VoiceControlSettingsWindow
+          +
+          +        def select_mic(name: str) -> None:
+          +            if name == "Automatic":
+          +                self._select_microphone(None)
+          +                return
+          +            for idx, dev in self.list_input_devices():
+          +                if dev == name:
+          +                    self._select_microphone(idx)
+          +                    return
+          +
+          +        hooks = {
+          +            "list_mics": self.list_input_devices,
+          +            "select_mic": select_mic,
+          +            "set_listening": lambda on: self._start_listening() if on else self._stop_listening(),
+          +        }
+          +        self._cmd_window = VoiceControlSettingsWindow(self.engine, hooks)
+                   self._cmd_window.show()
+           
+               def _toggle_listening(self) -> None:
+          @@ -363,6 +419,8 @@ def main() -> int:
+               logger.info("Initializing VoxPilot Engine...")
+               engine = VoxPilotEngine()
+               engine.start(live_mic=not args.no_mic, device_id=args.device)
+          +    from .settings_store import VoiceControlSettings
+          +    engine.apply_settings(VoiceControlSettings.load())
+           
+               def on_exit() -> None:
+                   logger.info("Shutting down VoxPilot...")
+          diff --git a/src/voxpilot/app/voice_settings.py b/src/voxpilot/app/voice_settings.py
+          new file mode 100644
+          index 0000000..b06621d
+          --- /dev/null
+          +++ b/src/voxpilot/app/voice_settings.py
+          @@ -0,0 +1,328 @@
+          +"""Voice Control settings window, laid out like Apple's "Change Voice Control settings" page.
+          +
+          +Option order (from the guide): Voice Control, Language, Microphone, Show hints, Play sound when command is
+          +recognized, Overlay, Fade overlay after inactivity, Voice Control Tutorial, Commands, Vocabulary, Advanced
+          +Actions menu. "Improve assistive voice features" (Apple data sharing) is intentionally not offered:
+          +VoxPilot sends nothing anywhere.
+          +"""
+          +from __future__ import annotations
+          +
+          +from typing import Callable, Optional
+          +
+          +from PySide6 import QtCore, QtGui, QtWidgets
+          +
+          +from .command_catalog import CATALOG, character_rows
+          +from .commands_window import Tutorial
+          +from .settings_store import (ACTION_TYPES, OVERLAY_CHOICES, VoiceControlSettings, export_custom_commands,
+          +                             import_custom_commands)
+          +
+          +
+          +class NewCommandDialog(QtWidgets.QDialog):
+          +    """Apple's "Create your own commands": When I say / While using / Perform."""
+          +
+          +    def __init__(self, parent=None) -> None:
+          +        super().__init__(parent)
+          +        self.setWindowTitle("New Voice Control Command")
+          +        form = QtWidgets.QFormLayout(self)
+          +        self.when = QtWidgets.QLineEdit()
+          +        self.when.setPlaceholderText("Use <text> or <number> for variable parts")
+          +        self.app = QtWidgets.QComboBox()
+          +        self.app.addItem("Any Application")
+          +        self.app.setEnabled(False)  # per-app commands are not supported (stated honestly in the tooltip)
+          +        self.app.setToolTip("Commands apply in any application")
+          +        self.action = QtWidgets.QComboBox()
+          +        self.action.addItems(ACTION_TYPES)
+          +        self.value = QtWidgets.QLineEdit()
+          +        self.value.setPlaceholderText("Text, shortcut such as ctrl+shift+t, URL, or app name")
+          +        form.addRow("When I say:", self.when)
+          +        form.addRow("While using:", self.app)
+          +        form.addRow("Perform:", self.action)
+          +        form.addRow("", self.value)
+          +        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Cancel | QtWidgets.QDialogButtonBox.Ok)
+          +        bb.button(QtWidgets.QDialogButtonBox.Ok).setText("Done")
+          +        bb.accepted.connect(self.accept)
+          +        bb.rejected.connect(self.reject)
+          +        form.addRow(bb)
+          +
+          +    def result_command(self) -> Optional[dict]:
+          +        when = self.when.text().strip()
+          +        if not when:
+          +            return None
+          +        return {"when_i_say": when, "action": self.action.currentText(), "value": self.value.text()}
+          +
+          +
+          +class CommandsDialog(QtWidgets.QDialog):
+          +    """Commands: searchable list (Custom first, then standard categories), preview area, Add / Remove."""
+          +
+          +    def __init__(self, settings: VoiceControlSettings, on_change: Callable[[], None], parent=None) -> None:
+          +        super().__init__(parent)
+          +        self.setWindowTitle("Commands")
+          +        self.settings = settings
+          +        self.on_change = on_change
+          +        self.resize(640, 460)
+          +        lay = QtWidgets.QVBoxLayout(self)
+          +        top = QtWidgets.QHBoxLayout()
+          +        top.addWidget(QtWidgets.QLabel("Show commands for:"))
+          +        lang = QtWidgets.QComboBox()
+          +        lang.addItem("English")
+          +        top.addWidget(lang)
+          +        top.addStretch(1)
+          +        self.search = QtWidgets.QLineEdit()
+          +        self.search.setPlaceholderText("Search")
+          +        self.search.setClearButtonEnabled(True)
+          +        self.search.textChanged.connect(self._filter)
+          +        top.addWidget(self.search)
+          +        lay.addLayout(top)
+          +        split = QtWidgets.QSplitter()
+          +        self.tree = QtWidgets.QTreeWidget()
+          +        self.tree.setHeaderHidden(True)
+          +        self.tree.setAlternatingRowColors(True)
+          +        self.tree.currentItemChanged.connect(self._preview)
+          +        self.preview = QtWidgets.QTextBrowser()
+          +        split.addWidget(self.tree)
+          +        split.addWidget(self.preview)
+          +        split.setSizes([300, 320])
+          +        lay.addWidget(split, 1)
+          +        row = QtWidgets.QHBoxLayout()
+          +        add = QtWidgets.QPushButton("+")
+          +        add.setFixedWidth(34)
+          +        add.clicked.connect(self._add)
+          +        rem = QtWidgets.QPushButton("\u2212")
+          +        rem.setFixedWidth(34)
+          +        rem.clicked.connect(self._remove)
+          +        row.addWidget(add)
+          +        row.addWidget(rem)
+          +        row.addStretch(1)
+          +        lay.addLayout(row)
+          +        self._populate()
+          +
+          +    def _populate(self) -> None:
+          +        self.tree.clear()
+          +        custom = QtWidgets.QTreeWidgetItem(["Custom"])
+          +        self.tree.addTopLevelItem(custom)
+          +        for i, c in enumerate(self.settings.custom_commands):
+          +            it = QtWidgets.QTreeWidgetItem([c["when_i_say"]])
+          +            it.setData(0, QtCore.Qt.UserRole, ("custom", i))
+          +            it.setData(0, QtCore.Qt.UserRole + 1, f'{c["action"]}: {c.get("value", "")}')
+          +            custom.addChild(it)
+          +        for cat, items in CATALOG.items():
+          +            top = QtWidgets.QTreeWidgetItem([cat])
+          +            self.tree.addTopLevelItem(top)
+          +            for phrase, desc in items:
+          +                it = QtWidgets.QTreeWidgetItem([phrase])
+          +                it.setData(0, QtCore.Qt.UserRole + 1, desc)
+          +                top.addChild(it)
+          +        chars = QtWidgets.QTreeWidgetItem(["Dictation and Spelling characters"])
+          +        self.tree.addTopLevelItem(chars)
+          +        for phrase, desc in character_rows():
+          +            it = QtWidgets.QTreeWidgetItem([phrase])
+          +            it.setData(0, QtCore.Qt.UserRole + 1, desc)
+          +            chars.addChild(it)
+          +        self.tree.expandItem(custom)
+          +        self.tree.expandItem(self.tree.topLevelItem(1))
+          +
+          +    def _filter(self, text: str) -> None:
+          +        text = text.strip().lower()
+          +        for i in range(self.tree.topLevelItemCount()):
+          +            top = self.tree.topLevelItem(i)
+          +            shown = 0
+          +            for j in range(top.childCount()):
+          +                match = not text or text in top.child(j).text(0).lower()
+          +                top.child(j).setHidden(not match)
+          +                shown += match
+          +            top.setHidden(bool(text) and shown == 0)
+          +            if text and shown:
+          +                top.setExpanded(True)
+          +
+          +    def _preview(self, cur, _prev) -> None:
+          +        if cur is None or cur.parent() is None:
+          +            self.preview.clear()
+          +            return
+          +        self.preview.setHtml(f"<h3>{cur.text(0)}</h3><p>{cur.data(0, QtCore.Qt.UserRole + 1) or ''}</p>")
+          +
+          +    def _add(self) -> None:
+          +        dlg = NewCommandDialog(self)
+          +        if dlg.exec() == QtWidgets.QDialog.Accepted:
+          +            cmd = dlg.result_command()
+          +            if cmd:
+          +                self.settings.custom_commands.append(cmd)
+          +                self._commit()
+          +
+          +    def _remove(self) -> None:
+          +        cur = self.tree.currentItem()
+          +        data = cur.data(0, QtCore.Qt.UserRole) if cur else None
+          +        if data and data[0] == "custom":
+          +            del self.settings.custom_commands[data[1]]
+          +            self._commit()
+          +
+          +    def _commit(self) -> None:
+          +        self.on_change()
+          +        self._populate()
+          +
+          +
+          +class VocabularyDialog(QtWidgets.QDialog):
+          +    """Vocabulary: words or phrases you added, with Add / Remove."""
+          +
+          +    def __init__(self, settings: VoiceControlSettings, on_change: Callable[[], None], parent=None) -> None:
+          +        super().__init__(parent)
+          +        self.setWindowTitle("Vocabulary")
+          +        self.settings = settings
+          +        self.on_change = on_change
+          +        self.resize(360, 320)
+          +        lay = QtWidgets.QVBoxLayout(self)
+          +        self.list = QtWidgets.QListWidget()
+          +        self.list.addItems(settings.vocabulary)
+          +        lay.addWidget(self.list, 1)
+          +        row = QtWidgets.QHBoxLayout()
+          +        add = QtWidgets.QPushButton("+")
+          +        add.setFixedWidth(34)
+          +        add.clicked.connect(self._add)
+          +        rem = QtWidgets.QPushButton("\u2212")
+          +        rem.setFixedWidth(34)
+          +        rem.clicked.connect(self._remove)
+          +        row.addWidget(add)
+          +        row.addWidget(rem)
+          +        row.addStretch(1)
+          +        lay.addLayout(row)
+          +
+          +    def _add(self) -> None:
+          +        text, ok = QtWidgets.QInputDialog.getText(self, "Vocabulary", "Word or phrase:")
+          +        if ok and text.strip():
+          +            self.settings.vocabulary.append(text.strip())
+          +            self.list.addItem(text.strip())
+          +            self.on_change()
+          +
+          +    def _remove(self) -> None:
+          +        row = self.list.currentRow()
+          +        if row >= 0:
+          +            del self.settings.vocabulary[row]
+          +            self.list.takeItem(row)
+          +            self.on_change()
+          +
+          +
+          +class VoiceControlSettingsWindow(QtWidgets.QWidget):
+          +    def __init__(self, engine, hooks: Optional[dict] = None, parent=None) -> None:
+          +        super().__init__(parent)
+          +        self.engine = engine
+          +        self.hooks = hooks or {}
+          +        self.settings: VoiceControlSettings = engine.settings
+          +        self.setWindowTitle("Voice Control")
+          +        self.resize(520, 470)
+          +        form = QtWidgets.QFormLayout(self)
+          +        form.setContentsMargins(24, 20, 24, 20)
+          +        form.setVerticalSpacing(12)
+          +        self.enabled = QtWidgets.QCheckBox()
+          +        self.enabled.setChecked(engine.mode.value != "sleep")
+          +        self.enabled.toggled.connect(self._toggle_listening)
+          +        form.addRow("Voice Control", self.enabled)
+          +        self.language = QtWidgets.QComboBox()
+          +        self.language.addItem("English")
+          +        form.addRow("Language", self.language)
+          +        self.mic = QtWidgets.QComboBox()
+          +        self.mic.addItem("Automatic")
+          +        for _idx, name in (self.hooks.get("list_mics") or (lambda: []))():
+          +            self.mic.addItem(name)
+          +        i = self.mic.findText(self.settings.microphone)
+          +        self.mic.setCurrentIndex(max(i, 0))
+          +        self.mic.currentTextChanged.connect(self._mic_changed)
+          +        form.addRow("Microphone", self.mic)
+          +        self.hints = QtWidgets.QCheckBox()
+          +        self.hints.setChecked(self.settings.show_hints)
+          +        self.hints.toggled.connect(lambda v: self._set("show_hints", v))
+          +        form.addRow("Show hints", self.hints)
+          +        self.sound = QtWidgets.QCheckBox()
+          +        self.sound.setChecked(self.settings.play_sound)
+          +        self.sound.toggled.connect(lambda v: self._set("play_sound", v))
+          +        form.addRow("Play sound when command is recognized", self.sound)
+          +        self.overlay = QtWidgets.QComboBox()
+          +        self.overlay.addItems(OVERLAY_CHOICES)
+          +        self.overlay.setCurrentText(self.settings.overlay)
+          +        self.overlay.currentTextChanged.connect(lambda v: self._set("overlay", v))
+          +        form.addRow("Overlay", self.overlay)
+          +        fade = QtWidgets.QWidget()
+          +        fl = QtWidgets.QHBoxLayout(fade)
+          +        fl.setContentsMargins(0, 0, 0, 0)
+          +        self.fade = QtWidgets.QCheckBox()
+          +        self.fade.setChecked(self.settings.fade_overlay)
+          +        self.fade.toggled.connect(lambda v: self._set("fade_overlay", v))
+          +        self.fade_secs = QtWidgets.QSpinBox()
+          +        self.fade_secs.setRange(1, 600)
+          +        self.fade_secs.setSuffix(" s")
+          +        self.fade_secs.setValue(self.settings.fade_after_seconds)
+          +        self.fade_secs.valueChanged.connect(lambda v: self._set("fade_after_seconds", int(v)))
+          +        self.fade_amt = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+          +        self.fade_amt.setRange(10, 95)
+          +        self.fade_amt.setValue(int(self.settings.fade_amount * 100))
+          +        self.fade_amt.valueChanged.connect(lambda v: self._set("fade_amount", v / 100.0))
+          +        fl.addWidget(self.fade)
+          +        fl.addWidget(self.fade_secs)
+          +        fl.addWidget(self.fade_amt, 1)
+          +        form.addRow("Fade overlay after inactivity", fade)
+          +        tut = QtWidgets.QPushButton("Open Tutorial...")
+          +        tut.clicked.connect(self._open_tutorial)
+          +        form.addRow("Voice Control Tutorial", tut)
+          +        cmds = QtWidgets.QPushButton("Commands...")
+          +        cmds.clicked.connect(lambda: CommandsDialog(self.settings, self._changed, self).exec())
+          +        form.addRow("Commands", cmds)
+          +        voc = QtWidgets.QPushButton("Vocabulary...")
+          +        voc.clicked.connect(lambda: VocabularyDialog(self.settings, self._changed, self).exec())
+          +        form.addRow("Vocabulary", voc)
+          +        adv = QtWidgets.QToolButton()
+          +        adv.setText("\u2026")
+          +        adv.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+          +        menu = QtWidgets.QMenu(adv)
+          +        menu.addAction("Import Custom Commands...").triggered.connect(self._import)
+          +        menu.addAction("Export Custom Commands...").triggered.connect(self._export)
+          +        menu.addAction("Delete All Custom Commands").triggered.connect(self._delete_all)
+          +        adv.setMenu(menu)
+          +        form.addRow("Advanced Actions", adv)
+          +
+          +    # -- actions -------------------------------------------------------------------------------
+          +    def _set(self, name: str, value) -> None:
+          +        setattr(self.settings, name, value)
+          +        self._changed()
+          +
+          +    def _changed(self) -> None:
+          +        try:
+          +            self.settings.save()
+          +        except OSError:
+          +            pass
+          +        self.engine.apply_settings(self.settings)
+          +
+          +    def _toggle_listening(self, on: bool) -> None:
+          +        cb = self.hooks.get("set_listening")
+          +        if cb:
+          +            cb(on)
+          +
+          +    def _mic_changed(self, name: str) -> None:
+          +        self.settings.microphone = name
+          +        cb = self.hooks.get("select_mic")
+          +        if cb:
+          +            cb(name)
+          +        self._changed()
+          +
+          +    def _open_tutorial(self) -> None:
+          +        self._tutorial = Tutorial(self.engine, self)
+          +        self._tutorial.show()
+          +
+          +    def _import(self) -> None:
+          +        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Import Custom Commands", "", "JSON (*.json)")
+          +        if path:
+          +            try:
+          +                import_custom_commands(self.settings, path)
+          +            except (OSError, ValueError):
+          +                QtWidgets.QMessageBox.warning(self, "Import Custom Commands", "That file could not be imported.")
+          +                return
+          +            self._changed()
+          +
+          +    def _export(self) -> None:
+          +        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export Custom Commands", "voice-control-commands.json",
+          +                                                        "JSON (*.json)")
+          +        if path:
+          +            export_custom_commands(self.settings, path)
+          +
+          +    def _delete_all(self) -> None:
+          +        if QtWidgets.QMessageBox.question(self, "Delete All Custom Commands",
+          +                                          "Delete all custom commands?") == QtWidgets.QMessageBox.Yes:
+          +            self.settings.custom_commands.clear()
+          +            self._changed()
           diff --git a/src/voxpilot/commands/command_parser.py b/src/voxpilot/commands/command_parser.py
-          index 1b16726..439549d 100644
+          index 439549d..47e2297 100644
           --- a/src/voxpilot/commands/command_parser.py
           +++ b/src/voxpilot/commands/command_parser.py
-          @@ -36,6 +36,15 @@ class CommandParser:
+          @@ -36,6 +36,11 @@ class CommandParser:
                        {"intent": "HIDE_NAMES", "patterns": [r"^(?:please\s+)?hide\s+(?:item\s+)?names$", r"^names\s+off$"]},
                        {"intent": "SHOW_GRID", "patterns": [r"^(?:show|show me)?\s*(?:the\s+)?(?:screen\s+)?grid$", r"^grid\s+on$"]},
                        {"intent": "HIDE_GRID", "patterns": [r"^(?:please\s+)?hide\s+grid$", r"^grid\s+off$", r"^cancel\s+grid$"]},
-          +            {"intent": "OPEN_DOCUMENT", "patterns": [r"^open\s+document$"]},
-          +            {"intent": "SAVE_DOCUMENT", "patterns": [r"^save\s+document$"]},
-          +            {"intent": "NEW_ITEM", "patterns": [r"^new\s+item$"]},
-          +            {"intent": "NEXT_APP", "patterns": [r"^next\s+app(?:lication)?$"]},
-          +            {"intent": "PREVIOUS_APP", "patterns": [r"^previous\s+app(?:lication)?$"]},
-          +            {"intent": "QUIT_APP", "patterns": [r"^quit\s+application$"]},
-          +            {"intent": "HIDE_APP", "patterns": [r"^hide\s+application$"]},
-          +            {"intent": "SHOW_KEYBOARD", "patterns": [r"^show\s+keyboard$"]},
-          +            {"intent": "HIDE_KEYBOARD", "patterns": [r"^hide\s+keyboard$"]},
-                       {"intent": "OPEN_TUTORIAL", "patterns": [r"^open\s+(the\s+)?voice\s+control\s+tutorial$"]},
-                       {"intent": "SHOW_COMMANDS", "patterns": [r"^show\s+commands$", r"^what\s+can\s+i\s+say$"]},
-                       {"intent": "WAKE_UP", "patterns": [r"^(?:voxpilot\s+)?wake\s+up(?:\s+voxpilot)?$", r"^start\s+listening$"]},
-          @@ -119,6 +128,12 @@ class CommandParser:
-                           raw_text=text,
-                       )
-
-          +        m_rep = re.match(r"^repeat\s+([a-z0-9]+)\s+times?$", cleaned)
-          +        if m_rep:
-          +            cnt = self.normalize_number(m_rep.group(1).strip())
-          +            if cnt:
-          +                return Intent(name="REPEAT_COMMAND", confidence=0.95, slots={"count": cnt}, raw_text=text)
+          +            {"intent": "UNSUPPORTED_MAC_COMMAND", "patterns": [
+          +                r"^show\s+dock$", r"^open\s+siri$", r"^search\s+spotlight\s+for\s+.+$", r"^show\s+vocabulary$",
+          +                r"^make\s+this\s+speakable$", r"^stop\s+listening\s+mac$",
+          +                r"^(?:quit|hide)\s+(?!(?:application|keyboard|names?|item names|numbers?|text numbers?|grid|window grid|commands|window)$).+$",
+          +            ]},
+                       {"intent": "OPEN_DOCUMENT", "patterns": [r"^open\s+document$"]},
+                       {"intent": "SAVE_DOCUMENT", "patterns": [r"^save\s+document$"]},
+                       {"intent": "NEW_ITEM", "patterns": [r"^new\s+item$"]},
+          diff --git a/src/voxpilot/contracts/dto.py b/src/voxpilot/contracts/dto.py
+          index c3018e1..0e753eb 100644
+          --- a/src/voxpilot/contracts/dto.py
+          +++ b/src/voxpilot/contracts/dto.py
+          @@ -399,6 +399,12 @@ class CommandResult:
+                       details=details,
+                   )
+           
+          +    @classmethod
+          +    def failure(cls, intent: Optional[Intent] = None, message: str = "") -> CommandResult:
+          +        """A recognised command that cannot be carried out (honest failure, not a mismatch)."""
+          +        return cls(status=CommandStatus.ERROR, code="ERR_UNSUPPORTED", message=message,
+          +                   matched_intent=intent, error_type="Unsupported")
           +
-                   # Check key repeat e.g. "press down 5 times", "press tab 3 times"
-                   m_repeat = re.match(r"^(?:press|hit)\s+([a-z0-9]+)\s+([a-z0-9]+)\s+times?$", cleaned)
-                   if m_repeat:
+               @classmethod
+               def error(
+                   cls,
+          diff --git a/src/voxpilot/dictation/formatting.py b/src/voxpilot/dictation/formatting.py
+          index 00536cc..5ea51c3 100644
+          --- a/src/voxpilot/dictation/formatting.py
+          +++ b/src/voxpilot/dictation/formatting.py
+          @@ -59,6 +59,35 @@ NATO_PHONETIC = {
+           
+           # Spoken punctuation mapping (multi-word phrases first for greedy matching)
+           PUNCTUATION_PHRASES = [
+          +    # Apple "Commands for dictating text" (support.apple.com/guide/mac-help/mh40695) - longest phrases first
+          +    ("cross-eyed laughing face", "XD"),
+          +    ("pound sterling sign", "\u00a3"),
+          +    ("open square bracket", "["),
+          +    ("close square bracket", "]"),
+          +    ("open angle bracket", "<"),
+          +    ("close angle bracket", ">"),
+          +    ("begin single quote", "\u2018"),
+          +    ("end single quote", "\u2019"),
+          +    ("large center dot", "\u25cf"),
+          +    ("multiplication sign", "\u00d7"),
+          +    ("greater than sign", ">"),
+          +    ("less than sign", "<"),
+          +    ("copyright sign", "\u00a9"),
+          +    ("registered sign", "\u00ae"),
+          +    ("trademark sign", "\u2122"),
+          +    ("smiley face", "\ue000"),
+          +    ("frowny face", "\ue001"),
+          +    ("winky face", "\ue002"),
+          +    ("degree sign", "\u00b0"),
+          +    ("center dot", "\u30fb"),
+          +    ("equal sign", "="),
+          +    ("minus sign", "-"),
+          +    ("euro sign", "\u20ac"),
+          +    ("yen sign", "\u00a5"),
+          +    ("cent sign", "\u00a2"),
+          +    ("end quote", "\u201d"),
+          +    ("apostrophe", "\u2018"),
+          +    ("caret", "^"),
+               # Multi-word phrases
+               ("exclamation point", "!"),
+               ("exclamation mark", "!"),
+          @@ -77,7 +106,6 @@ PUNCTUATION_PHRASES = [
+               ("close quotation", '"'),
+               ("open quote", '"'),
+               ("close quote", '"'),
+          -    ("end quote", '"'),
+               ("single quote", "'"),
+               ("open bracket", "["),
+               ("close bracket", "]"),
+          @@ -112,9 +140,9 @@ PUNCTUATION_PHRASES = [
+               ("semicolon", ";"),
+               ("newline", "\n"),
+               ("tab", "\t"),
+          -    ("ellipsis", "..."),
+          +    ("ellipsis", "\u2026"),
+               ("hyphen", "-"),
+          -    ("dash", "-"),
+          +    ("dash", "\u2013"),
+               ("slash", "/"),
+               ("backslash", "\\"),
+               ("asterisk", "*"),
+          @@ -126,6 +154,8 @@ PUNCTUATION_PHRASES = [
+               ("underscore", "_"),
+               ("plus", "+"),
+               ("equals", "="),
+          +    ("quote", "\u201c"),
+          +    ("point", "."),
+               ("tilde", "~"),
+               ("pipe", "|"),
+           ]
+          @@ -215,11 +245,51 @@ MONTHS = [
+           ]
+           
+           
+          +_NUM_UNITS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+          +              "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+          +              "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+          +              "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+          +_NUM_TOKENS = set(_NUM_UNITS) | {"hundred", "thousand", "and"}
+          +
+          +
+          +def _words_to_int(words):
+          +    """'twenty one' -> 21, 'one hundred and five' -> 105, 'two thousand' -> 2000; None when not a number."""
+          +    words = [w for w in words if w != "and"]
+          +    if not words:
+          +        return None
+          +    total = current = 0
+          +    for w in words:
+          +        if w in _NUM_UNITS:
+          +            current += _NUM_UNITS[w]
+          +        elif w == "hundred":
+          +            current = max(current, 1) * 100
+          +        elif w == "thousand":
+          +            total += max(current, 1) * 1000
+          +            current = 0
+          +        else:
+          +            return None
+          +    return total + current
+          +
+          +
+          +def _to_roman(n: int) -> str:
+          +    if n <= 0 or n >= 4000:
+          +        return str(n)
+          +    out = ""
+          +    for val, sym in ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"),
+          +                     (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+          +        while n >= val:
+          +            out += sym
+          +            n -= val
+          +    return out
+          +
+          +
+           class FormattingEngine:
+               """Production text formatting engine for speech dictation."""
+           
+               def __init__(self) -> None:
+                   self.all_caps_active: bool = False
+          +        self.title_caps_active: bool = False
+          +        self.no_space_active: bool = False
+                   self.sentence_start: bool = True
+           
+               def phonetic_command(self, command: str) -> str:
+          @@ -241,6 +311,8 @@ class FormattingEngine:
+               def reset_state(self) -> None:
+                   """Reset ongoing sentence and casing state."""
+                   self.all_caps_active = False
+          +        self.title_caps_active = False
+          +        self.no_space_active = False
+                   self.sentence_start = True
+           
+               def format_text(
+          @@ -279,6 +351,7 @@ class FormattingEngine:
+           
+                   # 8. Clean up internal sentinels
+                   text = text.replace("\x01", "")
+          +        text = text.replace("\ue000", ":-)").replace("\ue001", ":-(").replace("\ue002", ";-)")
+           
+                   return text
+           
+          @@ -360,16 +433,53 @@ class FormattingEngine:
+                           else ""
+                       )
+           
+          +            # Apple dictation commands: caps on/off, all caps (next word), all caps on/off, no space on/off,
+          +            # numeral, roman numeral
+          +            if three_words == "all caps on":
+          +                self.all_caps_active = True
+          +                i += 3
+          +                continue
+          +            if three_words == "all caps off":
+          +                self.all_caps_active = False
+          +                i += 3
+          +                continue
+          +            if three_words == "no space on":
+          +                self.no_space_active = True
+          +                i += 3
+          +                continue
+          +            if three_words == "no space off":
+          +                self.no_space_active = False
+          +                i += 3
+          +                continue
+          +            if two_words == "caps on":
+          +                self.title_caps_active = True
+          +                i += 2
+          +                continue
+          +            if two_words == "caps off":
+          +                self.title_caps_active = False
+          +                self.all_caps_active = False
+          +                i += 2
+          +                continue
+          +            if (two_words == "roman numeral") or word == "numeral":
+          +                k = i + (2 if two_words == "roman numeral" else 1)
+          +                j = k
+          +                while j < n and (tokens[j].lower() in _NUM_TOKENS):
+          +                    j += 1
+          +                value = _words_to_int([t.lower() for t in tokens[k:j]])
+          +                if value is not None:
+          +                    out_tokens.append(_to_roman(value) if two_words == "roman numeral" else str(value))
+          +                    i = j
+          +                    continue
+                       # Check multi-word modifier phrases
+                       if three_words == "all caps next":
+                           all_caps_next = True
+                           i += 3
+                           continue
+                       if two_words == "all caps":
+          -                self.all_caps_active = True
+          +                all_caps_next = True
+                           i += 2
+                           continue
+          -            if two_words in ("caps off", "no caps", "lowercase mode"):
+          +            if two_words in ("no caps", "lowercase mode"):
+                           self.all_caps_active = False
+                           i += 2
+                           continue
+          @@ -395,7 +505,7 @@ class FormattingEngine:
+                       if all_caps_next or self.all_caps_active:
+                           curr_word = curr_word.upper()
+                           all_caps_next = False
+          -            elif cap_next:
+          +            elif cap_next or self.title_caps_active:
+                           curr_word = curr_word.capitalize()
+                           cap_next = False
+                       elif lower_next:
+          @@ -403,7 +513,7 @@ class FormattingEngine:
+                           curr_word = "\x01" + curr_word.lower()
+                           lower_next = False
+           
+          -            if no_space_next and out_tokens:
+          +            if (no_space_next or self.no_space_active) and out_tokens:
+                           out_tokens[-1] = out_tokens[-1] + curr_word
+                           no_space_next = False
+                       else:
+          @@ -427,10 +537,10 @@ class FormattingEngine:
+                   text = re.sub(r"\s+([.,?!:;%)\]}—])", r"\1", text)
+           
+                   # Attach trailing punctuation (. , ? ! : ; % ) ] } — * _ ~) to preceding word
+          -        text = re.sub(r"\s+([.,?!:;%)\]}—*_~])", r"\1", text)
+          +        text = re.sub(r"\s+([.,?!:;%)\]}—*_~\u00b0\u00a9\u00ae\u2122\u00a2\u2026\u201d\u2019])", r"\1", text)
+           
+                   # Attach leading symbols to following word: ( [ { $ # @ ~ * \ / |
+          -        text = re.sub(r"([(\[{])\s+", r"\1", text)
+          +        text = re.sub(r"([(\[{\u201c\u2018\u00a3\u20ac\u00a5])\s+", r"\1", text)
+                   text = re.sub(r"([$#@~*\\/|])\s+(\w+)", r"\1\2", text)
+           
+                   # Attach hyphens, em dashes, and underscores without spaces if connecting words
           diff --git a/src/voxpilot/engine.py b/src/voxpilot/engine.py
-          index 0e3080f..e3a4c80 100644
+          index e3a4c80..737535b 100644
           --- a/src/voxpilot/engine.py
           +++ b/src/voxpilot/engine.py
-          @@ -454,6 +454,14 @@ class VoxPilotEngine:
+          @@ -4,6 +4,7 @@ Ties together Audio/FakeMic -> Speech Engine -> Command Parser -> Automation ->
+           """
+           
+           import ctypes
+          +import re
+           from ctypes import wintypes
+           import logging
+           import threading
+          @@ -66,6 +67,8 @@ class VoxPilotEngine:
+                   self._history: List[CommandResult] = []
+                   self._lock = threading.RLock()
+           
+          +        from voxpilot.app.settings_store import VoiceControlSettings
+          +        self.settings = VoiceControlSettings()
+                   self._live_capture: Optional[LiveAudioCapture] = None
+                   self._capture_thread: Optional[threading.Thread] = None
+           
+          @@ -298,7 +301,84 @@ class VoxPilotEngine:
+                   self._paint_text_numbers()
+                   return CommandResult.success(message=f"{op} {n}")
+           
+          +    # ---- Voice Control settings (Apple "Change Voice Control settings" page) -------------------------
+          +    def apply_settings(self, settings=None) -> None:
+          +        """Push saved settings into the running engine: custom commands, vocabulary, overlay, hints, sound, fade."""
+          +        if settings is not None:
+          +            self.settings = settings
+          +        st = self.settings
+          +        self.command_parser.custom_commands.clear()
+          +        for c in st.custom_commands:
+          +            self.command_parser.register_custom_command(c["when_i_say"], f'{c["action"]}|{c.get("value", "")}')
+          +        ov = self.overlay_service
+          +        for name, val in (("hints_enabled", st.show_hints),):
+          +            try:
+          +                setattr(ov, name, val)
+          +            except Exception:  # pragma: no cover
+          +                pass
+          +        setter = getattr(ov, "set_fade", None)
+          +        if setter:
+          +            setter(st.fade_overlay, st.fade_after_seconds, st.fade_amount)
+          +        self._apply_overlay_preference(st.overlay)
+          +
+          +    def _apply_overlay_preference(self, choice: str) -> None:
+          +        """"Overlay" setting: continuously show item names, numbers or the grid."""
+          +        if choice == "Item numbers":
+          +            self._handle_show_numbers(Intent(name="SHOW_NUMBERS_CONTINUOUS"), continuous=True)
+          +        elif choice == "Item names":
+          +            self.process_text_command("show names")
+          +        elif choice == "Numbered grid":
+          +            self.overlay_service.show_grid()
+          +        elif getattr(self, "_overlay_pref_active", False):
+          +            self.overlay_service.hide_all()
+          +        self._overlay_pref_active = choice != "None"
+          +
+          +    def _apply_vocabulary(self, text: str) -> str:
+          +        """Custom vocabulary: correct near-miss recognitions to the user's words and phrases."""
+          +        import difflib
+          +        vocab = [v.strip() for v in getattr(self.settings, "vocabulary", []) if v.strip()]
+          +        if not vocab:
+          +            return text
+          +        out = text
+          +        for term in sorted(vocab, key=len, reverse=True):  # phrases first
+          +            pat = re.compile(r"\b" + re.escape(term) + r"\b", re.IGNORECASE)
+          +            out = pat.sub(term, out)
+          +        words = out.split()
+          +        singles = {v.lower(): v for v in vocab if " " not in v}
+          +        fixed = []
+          +        for w in words:
+          +            core = w.strip(".,!?;:")
+          +            hit = difflib.get_close_matches(core.lower(), list(singles), n=1, cutoff=0.82) if len(core) > 3 else []
+          +            fixed.append(w.replace(core, singles[hit[0]]) if hit else w)
+          +        return " ".join(fixed)
+          +
+          +    def _run_custom_command(self, intent: Intent) -> CommandResult:
+          +        for c in self.command_parser.custom_commands:
+          +            if f"CUSTOM_{c['trigger']}" == intent.name:
+          +                kind, _, value = c["action"].partition("|")
+          +                break
+          +        else:
+          +            return CommandResult.no_match(raw_text=intent.raw_text, message="Unknown custom command")
+          +        for k, v in (intent.slots or {}).items():  # <text> / <number> placeholders in the value
+          +            value = value.replace(f"<{k.split('_')[0]}>", str(v))
+          +        if kind == "Insert text":
+          +            self.input_injector.type_unicode(value)
+          +        elif kind == "Press keyboard shortcut":
+          +            keys = [k.strip().lower() for k in re.split(r"[+\s]+", value) if k.strip()]
+          +            if not keys:
+          +                return CommandResult.failure(intent=intent, message="Empty shortcut")
+          +            self.input_injector.key_combination(keys)
+          +        elif kind == "Open URL":
+          +            import webbrowser
+          +            webbrowser.open(value)
+          +        elif kind == "Open app":
+          +            return self.dispatch_intent(Intent(name="OPEN_APP", slots={"app": value}, raw_text=intent.raw_text))
+          +        else:
+          +            return CommandResult.failure(intent=intent, message=f"Unsupported action {kind}")
+          +        return CommandResult.success(intent=intent, message=f"Ran custom command: {c['trigger']}")
+          +
+               def _handle_text_entry(self, text: str) -> None:
+          +        text = self._apply_vocabulary(text)
+                   res = self._try_text_number_command(text)
+                   if res is not None:
+                       self._record_result(res)
+          @@ -333,6 +413,8 @@ class VoxPilotEngine:
+                           message="Voice Control is paused. Say 'Start listening' to resume.",
+                       )
+           
+          +        if name.startswith("CUSTOM_"):
+          +            return self._run_custom_command(intent)
+                   if name == "SHOW_NUMBERS":
+                       return self._handle_show_numbers(intent, continuous=False)
+                   elif name == "SHOW_NUMBERS_CONTINUOUS":
+          @@ -454,6 +536,12 @@ class VoxPilotEngine:
                        if show:
                            show(self.visible_commands)
                        return CommandResult.success(intent=intent, message="Displayed voice commands")
-          +        elif name in self._SIMPLE_KEYS:
-          +            keys, msg = self._SIMPLE_KEYS[name]
-          +            self.input_injector.key_combination(list(keys))
-          +            return CommandResult.success(intent=intent, message=msg)
-          +        elif name in ("SHOW_KEYBOARD", "HIDE_KEYBOARD"):
-          +            return self._handle_keyboard(intent, show=(name == "SHOW_KEYBOARD"))
-          +        elif name == "REPEAT_COMMAND":
-          +            return self._handle_repeat(intent)
-                   elif name == "OPEN_TUTORIAL":
-                       opener = getattr(self.overlay_service, "show_tutorial", None)
-                       if opener:
-          @@ -851,6 +859,47 @@ class VoxPilotEngine:
-                   self.input_injector.move_cursor_relative(dx, dy)
-                   return CommandResult.success(intent=intent, message=f"Moved cursor {direction} by {amount}px")
-
-          +    # Windows equivalents of guide commands (Basic Navigation list); approximations are noted in the docs.
-          +    _SIMPLE_KEYS = {
-          +        "OPEN_DOCUMENT": (("ctrl", "o"), "Open document"),
-          +        "SAVE_DOCUMENT": (("ctrl", "s"), "Saved document"),
-          +        "NEW_ITEM": (("ctrl", "n"), "New item"),
-          +        "NEXT_APP": (("alt", "tab"), "Next app"),
-          +        "PREVIOUS_APP": (("alt", "shift", "tab"), "Previous app"),
-          +        "QUIT_APP": (("alt", "f4"), "Quit application"),
-          +        "HIDE_APP": (("win", "down"), "Hid application"),
-          +    }
+          +        elif name == "HIDE_APP":
+          +            return self._minimize_foreground(intent, "Hid application")
+          +        elif name == "UNSUPPORTED_MAC_COMMAND":
+          +            self.overlay_service.update_hud(mode=self.mode, text="Not available on Windows",
+          +                                            error_hint="Not available on Windows")
+          +            return CommandResult.failure(intent=intent, message=f"'{intent.raw_text}' is a Mac command that VoxPilot does not support on Windows")
+                   elif name in self._SIMPLE_KEYS:
+                       keys, msg = self._SIMPLE_KEYS[name]
+                       self.input_injector.key_combination(list(keys))
+          @@ -526,8 +614,7 @@ class VoxPilotEngine:
+                       self.input_injector.key_combination(["alt", "f4"])
+                       return CommandResult.success(intent=intent, message="Closed window")
+                   elif name == "MINIMIZE_WINDOW":
+          -            self.input_injector.key_combination(["win", "down"])
+          -            return CommandResult.success(intent=intent, message="Minimized window")
+          +            return self._minimize_foreground(intent, "Minimized window")
+                   elif name == "MAXIMIZE_WINDOW":
+                       self.input_injector.key_combination(["win", "up"])
+                       return CommandResult.success(intent=intent, message="Maximized window")
+          @@ -867,8 +954,20 @@ class VoxPilotEngine:
+                   "NEXT_APP": (("alt", "tab"), "Next app"),
+                   "PREVIOUS_APP": (("alt", "shift", "tab"), "Previous app"),
+                   "QUIT_APP": (("alt", "f4"), "Quit application"),
+          -        "HIDE_APP": (("win", "down"), "Hid application"),
+          -    }
+          +            }
           +
-          +    def _handle_keyboard(self, intent: Intent, show: bool) -> CommandResult:
-          +        """Windows on-screen keyboard (osk.exe) as the counterpart of the Accessibility Keyboard."""
-          +        import subprocess
+          +    def _minimize_foreground(self, intent: Intent, msg: str) -> CommandResult:
+          +        """Minimise the foreground window with ShowWindow(SW_MINIMIZE); Win+Down only restores a maximised window."""
           +        try:
-          +            if show:
-          +                subprocess.Popen(["osk.exe"])
-          +            else:
-          +                subprocess.run(["taskkill", "/IM", "osk.exe", "/F"], capture_output=True, timeout=5)
+          +            user32 = ctypes.windll.user32
+          +            hwnd = user32.GetForegroundWindow()
+          +            if not hwnd:
+          +                return CommandResult.failure(intent=intent, message="No foreground window")
+          +            user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+          +            return CommandResult.success(intent=intent, message=msg)
           +        except Exception as exc:
-          +            return CommandResult.failure(intent=intent, message=f"Keyboard: {exc}")
-          +        return CommandResult.success(intent=intent, message="Keyboard shown" if show else "Keyboard hidden")
-          +
-          +    def _handle_repeat(self, intent: Intent) -> CommandResult:
-          +        """"Repeat <n> times": run the previous command again n times."""
-          +        count = max(1, min(int(intent.slots.get("count", 1)), 50))
-          +        prev = None
-          +        for r in reversed(self._history):
-          +            mi = getattr(r, "matched_intent", None)
-          +            if mi is not None and mi.name != "REPEAT_COMMAND":
-          +                prev = mi
-          +                break
-          +        if prev is None:
-          +            return CommandResult.no_match(raw_text=intent.raw_text, message="Nothing to repeat")
-          +        res = None
-          +        for _ in range(count):
-          +            res = self.dispatch_intent(prev)
-          +            if not res.is_success:
-          +                break
-          +        return res
-          +
+          +            self.input_injector.key_combination(["win", "down"])
+          +            return CommandResult.success(intent=intent, message=f"{msg} (fallback Win+Down: {exc})")
+           
+               def _handle_keyboard(self, intent: Intent, show: bool) -> CommandResult:
+                   """Windows on-screen keyboard (osk.exe) as the counterpart of the Accessibility Keyboard."""
+          @@ -902,6 +1001,18 @@ class VoxPilotEngine:
+           
                def _record_result(self, res: CommandResult) -> None:
                    self._last_result = res
+          +        try:
+          +            if getattr(self.settings, "play_sound", False) and res.is_success and res.matched_intent is not None:
+          +                try:
+          +                    import winsound
+          +                    winsound.MessageBeep(winsound.MB_OK)
+          +                except Exception:
+          +                    pass
+          +            touch = getattr(self.overlay_service, "touch", None)
+          +            if touch:
+          +                touch()
+          +        except Exception:  # pragma: no cover
+          +            logger.exception("post-command feedback failed")
                    for cb in list(getattr(self, "result_listeners", [])):
+                       try:
+                           cb(res)
+          diff --git a/src/voxpilot/overlay/overlay_service.py b/src/voxpilot/overlay/overlay_service.py
+          index 9dfa96b..eacd351 100644
+          --- a/src/voxpilot/overlay/overlay_service.py
+          +++ b/src/voxpilot/overlay/overlay_service.py
+          @@ -257,7 +257,7 @@ class OverlayCanvas(QtWidgets.QWidget):
+                           painter.drawPixmap(max(0, qr.x() - pix.width() - 2), qr.y() + max(0, (qr.height() - pix.height()) // 2), pix)
+           
+                   # 5. Recognised-command pill (Apple: small light italic pill under the menu bar)
+          -        if self.hud_text:
+          +        if self.hud_text and getattr(self, 'hints_enabled', True):
+                       font_msg = QtGui.QFont("Segoe UI", 10)
+                       font_msg.setItalic(True)
+                       painter.setFont(font_msg)
+          @@ -535,6 +535,34 @@ class OverlayService(IOverlayService):
+                       except Exception:
+                           pass
+           
+          +    def set_fade(self, enabled: bool, seconds: int = 5, amount: float = 0.5) -> None:
+          +        """"Fade overlay after inactivity": dim the overlay after `seconds` without activity."""
+          +        self._fade = (bool(enabled), max(1, int(seconds)), min(max(float(amount), 0.0), 0.95))
+          +        timer = getattr(self, "_fade_timer", None)
+          +        if timer is None:
+          +            timer = QtCore.QTimer(self._canvas)
+          +            timer.setSingleShot(True)
+          +            timer.timeout.connect(self._fade_now)
+          +            self._fade_timer = timer
+          +        self.touch()
+          +
+          +    def _fade_now(self) -> None:
+          +        enabled, _secs, amount = getattr(self, "_fade", (False, 5, 0.5))
+          +        if enabled and self._canvas is not None:
+          +            self._canvas.setWindowOpacity(1.0 - amount)
+          +
+          +    def touch(self) -> None:
+          +        """Activity happened: restore full opacity and restart the inactivity timer."""
+          +        if self._canvas is None:
+          +            return
+          +        self._canvas.setWindowOpacity(1.0)
+          +        enabled, secs, _amount = getattr(self, "_fade", (False, 5, 0.5))
+          +        timer = getattr(self, "_fade_timer", None)
+          +        if timer is not None:
+          +            timer.stop()
+          +            if enabled:
+          +                timer.start(secs * 1000)
+          +
+               def show_commands_window(self, rows) -> None:
+                   """Show the floating Commands palette (voice command "Show commands")."""
+                   from voxpilot.app.commands_window import CommandsWindow
+          @@ -672,7 +700,7 @@ for _name in (
+               "show_numbers", "show_names", "hide_names", "show_grid", "show_text_numbers",
+               "hide_text_numbers", "show_disambiguation", "show_hud", "hide", "hide_numbers",
+               "hide_grid", "hide_all", "update_hud", "drill_down_grid", "undo_grid",
+          -    "show_commands_window", "hide_commands_window", "show_tutorial",
+          +    "show_commands_window", "hide_commands_window", "show_tutorial", "set_fade", "touch",
+           ):
+               if hasattr(OverlayService, _name):
+                   setattr(OverlayService, _name, _marshal(getattr(OverlayService, _name)))
+          diff --git a/tests/test_dictation.py b/tests/test_dictation.py
+          index 929e162..bb2c3eb 100644
+          --- a/tests/test_dictation.py
+          +++ b/tests/test_dictation.py
+          @@ -140,7 +140,8 @@ def test_nato_phonetic_compounds(raw_input: str, expected_output: str) -> None:
+           CAPITALIZATION_CASES = [
+               ("capitalize next word please", "Word please"),
+               ("cap next title here", "Title here"),
+          -    ("this is all caps very important text", "This is VERY IMPORTANT TEXT"),
+          +    ("this is all caps very important text", "This is VERY important text"),
+          +    ("this is all caps on very important all caps off text", "This is VERY IMPORTANT text"),
+               ("this is all caps confidential caps off thank you", "This is CONFIDENTIAL thank you"),
+               ("start all caps next warning proceed", "Start WARNING proceed"),
+               ("start no space next word", "Startword"),
           diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
-          index 2403b6b..8238e73 100644
+          index 8238e73..39948dc 100644
           --- a/tests/test_voice_control_parity.py
           +++ b/tests/test_voice_control_parity.py
-          @@ -322,3 +322,34 @@ def test_open_voice_control_tutorial_command() -> None:
-               intent = CommandParser().parse("open voice control tutorial")
-               assert intent.name == "OPEN_TUTORIAL"
-               assert CommandParser().parse("open mail").name != "OPEN_TUTORIAL"
+          @@ -353,3 +353,123 @@ def test_character_list_in_commands_rows() -> None:
+               texts = [r[1] for r in rows]
+               assert any(t.startswith("question mark") and "?" in t for t in texts)
+               assert any(t.startswith("alpha") and t.endswith("a") for t in texts)
           +
           +
-          +def test_guide_basic_navigation_windows_equivalents_parse() -> None:
+          +def test_unsupported_mac_commands_fail_honestly(engine) -> None:
           +    from voxpilot.commands.command_parser import CommandParser
           +    p = CommandParser()
-          +    expect = {"open document": "OPEN_DOCUMENT", "save document": "SAVE_DOCUMENT", "new item": "NEW_ITEM",
-          +              "next app": "NEXT_APP", "previous app": "PREVIOUS_APP", "quit application": "QUIT_APP",
-          +              "hide application": "HIDE_APP", "show keyboard": "SHOW_KEYBOARD",
-          +              "hide keyboard": "HIDE_KEYBOARD", "repeat 3 times": "REPEAT_COMMAND"}
-          +    for phrase, name in expect.items():
-          +        assert p.parse(phrase).name == name, phrase
-          +    assert p.parse("open mail").name == "OPEN_APP"
-          +
-          +
-          +def test_repeat_runs_previous_command_n_times(engine) -> None:
+          +    for phrase in ("open siri", "show dock", "search spotlight for cats", "show vocabulary",
+          +                   "make this speakable", "stop listening mac", "quit mail", "hide safari"):
+          +        assert p.parse(phrase).name == "UNSUPPORTED_MAC_COMMAND", phrase
+          +    for phrase in ("hide numbers", "hide names", "hide grid", "hide keyboard", "hide application", "hide commands"):
+          +        assert p.parse(phrase).name != "UNSUPPORTED_MAC_COMMAND", phrase
           +    e, _, _ = engine
           +    e.is_running = True
-          +    keys = []
+          +    res = e.process_text_command("open siri")
+          +    assert not res.is_success
+          +
+          +
+          +def test_custom_commands_vocabulary_and_settings_roundtrip(engine, tmp_path) -> None:
+          +    from voxpilot.app.settings_store import VoiceControlSettings
+          +    e, _, _ = engine
+          +    e.is_running = True
+          +    st = VoiceControlSettings(
+          +        vocabulary=["Kubernetes", "Ansh Saxena"],
+          +        custom_commands=[{"when_i_say": "sign off", "action": "Insert text", "value": "Regards, Ansh"},
+          +                         {"when_i_say": "save it", "action": "Press keyboard shortcut", "value": "ctrl+s"}],
+          +    )
+          +    typed, keys = [], []
+          +    e.input_injector.type_unicode = lambda t: typed.append(t) or True
           +    e.input_injector.key_combination = lambda k: keys.append(tuple(k)) or True
-          +    assert e.process_text_command("save document").is_success
-          +    assert e.process_text_command("repeat 3 times").is_success
-          +    assert keys == [("ctrl", "s")] * 4
-          +    assert e.process_text_command("hide application").is_success
+          +    e.apply_settings(st)
+          +    assert e.process_text_command("sign off").is_success and typed == ["Regards, Ansh"]
+          +    assert e.process_text_command("save it").is_success and keys == [("ctrl", "s")]
+          +    assert e._apply_vocabulary("deploy to kubernetis today") == "deploy to Kubernetes today"
+          +    assert e._apply_vocabulary("hello ansh saxena") == "hello Ansh Saxena"
+          +    path = st.save(str(tmp_path / "s.json"))
+          +    again = VoiceControlSettings.load(path)
+          +    assert again.vocabulary == st.vocabulary and again.custom_commands == st.custom_commands
           +
           +
-          +def test_character_list_in_commands_rows() -> None:
-          +    from voxpilot.app.command_catalog import commands_for_context
-          +    rows = [r for r in commands_for_context("general") if r[0] == "Dictation and Spelling characters"]
-          +    texts = [r[1] for r in rows]
-          +    assert any(t.startswith("question mark") and "?" in t for t in texts)
-          +    assert any(t.startswith("alpha") and t.endswith("a") for t in texts)
+          +def test_settings_window_matches_guide_options_and_applies(engine, tmp_path, monkeypatch) -> None:
+          +    from PySide6 import QtWidgets
+          +    monkeypatch.setenv("VOXPILOT_SETTINGS_DIR", str(tmp_path))
+          +    from voxpilot.app.voice_settings import VoiceControlSettingsWindow
+          +    e, _, _ = engine
+          +    w = VoiceControlSettingsWindow(e, {"list_mics": lambda: [(1, "Laptop Microphone")]})
+          +    form = w.layout()
+          +    labels = [form.itemAt(i, QtWidgets.QFormLayout.LabelRole).widget().text()
+          +              for i in range(form.rowCount()) if form.itemAt(i, QtWidgets.QFormLayout.LabelRole)]
+          +    assert labels == ["Voice Control", "Language", "Microphone", "Show hints",
+          +                      "Play sound when command is recognized", "Overlay", "Fade overlay after inactivity",
+          +                      "Voice Control Tutorial", "Commands", "Vocabulary", "Advanced Actions"]
+          +    w.hints.setChecked(False)
+          +    assert e.settings.show_hints is False
+          +    assert (tmp_path / "settings.json").exists()
+          +    w.overlay.setCurrentText("Numbered grid")
+          +    e.overlay_service.show_grid.assert_called()
+          +    e.overlay_service.hide_all.reset_mock()
+          +    w.overlay.setCurrentText("None")
+          +    e.overlay_service.hide_all.assert_called()
+          +
+          +
+          +APPLE_DICTATION_COMMANDS = [
+          +    # (spoken, expected) from Apple's "Commands for dictating text on Mac" (mh40695)
+          +    ("a open square bracket b close square bracket", "A [b]"),
+          +    ("open angle bracket", "<"), ("close angle bracket", ">"),
+          +    ("go ellipsis", "Go…"), ("hello question mark", "Hello?"),
+          +    ("tom ampersand jerry", "Tom & jerry"),
+          +    ("20 degree sign", "20°"),
+          +    ("x equal sign y", "X = y"), ("x plus sign y", "X + y"),
+          +    ("x multiplication sign y", "X × y"),
+          +    ("smiley face", ":-)"), ("frowny face", ":-("), ("winky face", ";-)"),
+          +    ("cross-eyed laughing face", "XD"),
+          +    ("acme trademark sign", "Acme™"), ("acme registered sign", "Acme®"), ("acme copyright sign", "Acme©"),
+          +    ("caps on hello big world caps off done", "Hello Big World done"),
+          +    ("all caps on usa rules all caps off ok", "USA RULES ok"),
+          +    ("chapter roman numeral fourteen done", "Chapter XIV done"),
+          +    ("i have numeral twenty one apples", "I have 21 apples"),
+          +    ("no space on a b c no space off d", "Abc d"),
+          +]
+          +
+          +
+          +@pytest.mark.parametrize("spoken,expected", APPLE_DICTATION_COMMANDS)
+          +def test_apple_dictation_commands(spoken, expected) -> None:
+          +    from voxpilot.dictation.formatting import FormattingEngine
+          +    assert FormattingEngine().format_text(spoken) == expected
+          +
+          +
+          +def test_apple_dictation_symbol_table() -> None:
+          +    from voxpilot.dictation.formatting import PUNCTUATION_PHRASES
+          +    table = dict(PUNCTUATION_PHRASES)
+          +    for phrase, char in {"degree sign": "\u00b0", "euro sign": "\u20ac", "yen sign": "\u00a5", "cent sign": "\u00a2",
+          +                         "pound sterling sign": "\u00a3", "center dot": "\u30fb", "large center dot": "\u25cf",
+          +                         "begin single quote": "\u2018", "end single quote": "\u2019", "quote": "\u201c",
+          +                         "end quote": "\u201d", "dash": "\u2013", "hyphen": "-", "caret": "^", "backslash": "\\"}.items():
+          +        assert table[phrase] == char, phrase
+          +
+          +
+          +@pytest.mark.skipif(sys.platform != "win32", reason="needs a real Windows desktop")
+          +def test_hide_application_really_minimises_notepad() -> None:
+          +    import ctypes, subprocess, time
+          +    from voxpilot.engine import VoxPilotEngine
+          +    proc = subprocess.Popen(["notepad.exe"])
+          +    try:
+          +        time.sleep(2.0)
+          +        u32 = ctypes.windll.user32
+          +        hwnd = 0
+          +        for _ in range(20):
+          +            hwnd = u32.FindWindowW("Notepad", None)
+          +            if hwnd:
+          +                break
+          +            time.sleep(0.25)
+          +        assert hwnd
+          +        u32.SetForegroundWindow(hwnd)
+          +        time.sleep(0.5)
+          +        if u32.GetForegroundWindow() != hwnd:
+          +            pytest.skip("runner would not give Notepad the foreground; cannot test minimise")
+          +        VoxPilotEngine._minimize_foreground(MagicMock(), MagicMock(), "Hid application")
+          +        time.sleep(0.5)
+          +        assert u32.IsIconic(hwnd)
+          +    finally:
+          +        proc.kill()
           PATCH_EOF
-          git apply --whitespace=nowarn vehicle/fix13.patch
+          git apply --whitespace=nowarn vehicle/fix14.patch
       - name: Setup and test
         shell: cmd
         run: setup_windows.bat
@@ -222,5 +1282,5 @@ jobs:
           git config user.name "voxpilot-parity-bot"
           git config user.email "noreply@users.noreply.github.com"
           git add -A -- . ':!vehicle' ':!.venv' ':!models'
-          git commit -m "Guide navigation equivalents, repeat, character list"
+          git commit -m "Settings window, custom commands, Apple dictation commands, honest unsupported, minimise, flush menu"
           git push origin voxpilot-voice-control-parity
