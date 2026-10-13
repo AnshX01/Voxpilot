@@ -1,4 +1,4 @@
-# run 9
+# run 10
 name: update-source-branch
 on:
   push:
@@ -20,244 +20,145 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply fix9 (inline patch)
+      - name: Apply fix10 (inline patch)
         shell: bash
         run: |
-          cat > vehicle/fix9.patch <<'PATCH_EOF'
+          cat > vehicle/fix10.patch <<'PATCH_EOF'
+          diff --git a/src/voxpilot/app/cli.py b/src/voxpilot/app/cli.py
+          index c70e721..177f1ab 100644
+          --- a/src/voxpilot/app/cli.py
+          +++ b/src/voxpilot/app/cli.py
+          @@ -150,6 +150,49 @@ def run_calibrate() -> int:
+               return 0
+
+
+          +def run_mic_test(seconds: int, device, report_path: str = "voxpilot-mic-test.txt") -> int:
+          +    """Record from the real microphone and show what the recognizer hears (writes voxpilot-mic-test.txt)."""
+          +    import time
+          +    import numpy as np
+          +    from ..contracts.dto import TranscriptEvent
+          +    from ..speech.audio_capture import LiveAudioCapture
+          +    from ..speech.vosk_engine import VoskSpeechEngine
+          +
+          +    lines = []
+          +
+          +    def say(msg: str) -> None:
+          +        print(msg)
+          +        lines.append(msg)
+          +
+          +    engine = VoskSpeechEngine()
+          +    engine.set_open_vocabulary(True)
+          +    engine.subscribe(lambda ev: say(("FINAL   : " if ev.is_final else "partial : ") + ev.text) if ev.text else None)
+          +    engine.start()
+          +    cap = LiveAudioCapture()
+          +    cap.start(device_id=device)
+          +    say(f"Input device index: {cap.device_id}, native rate: {cap.native_samplerate}, channels: {cap.native_channels}")
+          +    say(f"Speak normally for {seconds} seconds...")
+          +    t_end, peak, sq, n, dropped0 = time.time() + seconds, 0.0, 0.0, 0, 0
+          +    while time.time() < t_end:
+          +        chunk = cap.read_chunk(timeout=0.2)
+          +        if not chunk:
+          +            continue
+          +        a = np.frombuffer(chunk.data, dtype=np.int16).astype(np.float32) / 32768.0
+          +        if a.size:
+          +            peak = max(peak, float(np.abs(a).max()))
+          +            sq += float((a * a).sum())
+          +            n += a.size
+          +        engine.process_audio(chunk)
+          +    engine.flush()
+          +    cap.stop()
+          +    rms = (sq / n) ** 0.5 if n else 0.0
+          +    say(f"Peak level: {peak:.3f}  RMS: {rms:.4f}  (peak below 0.02 = mic too quiet or wrong device)")
+          +    with open(report_path, "w", encoding="utf-8") as fh:
+          +        fh.write("\n".join(lines) + "\n")
+          +    print(f"Saved {report_path}")
+          +    return 0
+          +
+          +
+           def main() -> int:
+               parser = argparse.ArgumentParser(description="VoxPilot Voice Control CLI")
+               subparsers = parser.add_subparsers(dest="command")
+          @@ -160,6 +203,10 @@ def main() -> int:
+               subparsers.add_parser("calibrate", help="Run acoustic calibration wizard")
+               subparsers.add_parser("run", help="Launch VoxPilot system tray application")
+
+          +    mic_parser = subparsers.add_parser("mic-test", help="Record from the microphone and show what is recognized")
+          +    mic_parser.add_argument("--seconds", type=int, default=10)
+          +    mic_parser.add_argument("--device", type=int, default=None)
+          +
+               say_parser = subparsers.add_parser("say", help="Simulate a spoken voice command")
+               say_parser.add_argument("phrase", type=str, help="Utterance to simulate")
+
+          @@ -167,6 +214,8 @@ def main() -> int:
+
+               if args.command == "doctor":
+                   return run_doctor()
+          +    elif args.command == "mic-test":
+          +        return run_mic_test(args.seconds, args.device)
+               elif args.command == "say":
+                   return run_say(args.phrase)
+               elif args.command == "list-commands":
           diff --git a/src/voxpilot/app/tray.py b/src/voxpilot/app/tray.py
-          index 226f484..4e31b48 100644
+          index 4e31b48..b7fe2d5 100644
           --- a/src/voxpilot/app/tray.py
           +++ b/src/voxpilot/app/tray.py
-          @@ -75,7 +75,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+          @@ -73,9 +73,9 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+               )
+
                _MENU_QSS = """
-               QMenu { background: rgba(244,240,236,245); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
-                       padding: 8px 6px; icon-size: 26px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
-          -    QMenu::item { padding: 6px 22px 6px 10px; border-radius: 6px; margin: 1px 4px; }
-          +    QMenu::item { padding: 6px 26px 6px 10px; border-radius: 6px; margin: 1px 4px; }
+          -    QMenu { background: rgba(244,240,236,245); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
+          -            padding: 8px 6px; icon-size: 26px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
+          -    QMenu::item { padding: 6px 26px 6px 10px; border-radius: 6px; margin: 1px 4px; }
+          +    QMenu { background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(247,243,238,247), stop:1 rgba(226,219,212,247)); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
+          +            padding: 8px 6px; icon-size: 30px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
+          +    QMenu::item { padding: 3px 26px 3px 8px; border-radius: 6px; margin: 1px 6px; }
                QMenu::item:selected { background: rgba(10,132,255,255); color: white; }
                QMenu::item:disabled { color: #8e8a86; }
                QMenu::separator { height: 1px; background: rgba(0,0,0,30); margin: 6px 14px; }
-          @@ -86,8 +86,8 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+          @@ -86,7 +86,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
                def _add_header(menu, text: str, title: bool = False):
                    label = QtWidgets.QLabel(text)
                    label.setStyleSheet(
-          -            "padding: 4px 14px 2px 14px; background: transparent; "
-          -            + ("font-weight: 700; color: #1d1d1f;" if title else "font-weight: 600; color: #6e6a66;")
-          +            "padding: 6px 14px 3px 14px; background: transparent; font-size: 10.5pt; "
-          +            + ("font-weight: 700; font-size: 11pt; color: #1d1d1f;" if title else "font-weight: 600; color: #8a8681;")
+          -            "padding: 6px 14px 3px 14px; background: transparent; font-size: 10.5pt; "
+          +            "padding: 4px 14px 2px 14px; background: transparent; font-size: 10.5pt; "
+                       + ("font-weight: 700; font-size: 11pt; color: #1d1d1f;" if title else "font-weight: 600; color: #8a8681;")
                    )
                    wa = QtWidgets.QWidgetAction(menu)
-                   wa.setDefaultWidget(label)
-          @@ -138,10 +138,24 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-                           ex, ey = 22 + dx * 12, 22 + dy * 12
-                           p.drawLine(ex, ey, ex - dx * 4 + dy * 4, ey - dy * 4 + dx * 4)
-                           p.drawLine(ex, ey, ex - dx * 4 - dy * 4, ey - dy * 4 - dx * 4)
-          +        elif kind == "s":
-          +            # simplified Swift bird silhouette
-          +            path = QtGui.QPainterPath()
-          +            path.moveTo(10, 14)
-          +            path.cubicTo(18, 24, 26, 28, 33, 30)
-          +            path.cubicTo(27, 31, 20, 29, 15, 26)
-          +            path.cubicTo(20, 31, 27, 34, 36, 33)
-          +            path.cubicTo(38, 31, 38, 26, 34, 21)
-          +            path.cubicTo(36, 17, 36, 13, 34, 10)
-          +            path.cubicTo(30, 17, 24, 19, 18, 17)
-          +            path.cubicTo(15, 16, 12, 15, 10, 14)
-          +            p.setPen(QtCore.Qt.NoPen)
-          +            p.setBrush(fg)
-          +            p.drawPath(path)
-                   else:
-          -            f = QtGui.QFont("Segoe UI", 17, QtGui.QFont.Bold)
-          +            f = QtGui.QFont("Segoe UI", 17, QtGui.QFont.Normal)
-                       p.setFont(f)
-          -            p.drawText(QtCore.QRect(0, 0, 44, 44), QtCore.Qt.AlignCenter, "A" if kind == "a" else "S")
-          +            p.drawText(QtCore.QRect(0, 0, 44, 44), QtCore.Qt.AlignCenter, "A")
-                   p.end()
-                   return QtGui.QIcon(px)
-
-          @@ -375,7 +389,14 @@ def main() -> int:
-                       3000,
-                   )
-
-          -    return app.exec()
-          +    overlay = getattr(engine, "overlay_service", None)
-          +    if overlay is not None:
-          +        overlay.gui_loop_running = True
-          +    try:
-          +        return app.exec()
-          +    finally:
-          +        if overlay is not None:
-          +            overlay.gui_loop_running = False
-
-
-           if __name__ == "__main__":
-          diff --git a/src/voxpilot/engine.py b/src/voxpilot/engine.py
-          index 3cd7bdf..150871c 100644
-          --- a/src/voxpilot/engine.py
-          +++ b/src/voxpilot/engine.py
-          @@ -109,10 +109,20 @@ class VoxPilotEngine:
-                           ev = self._dispatch_q.get()
-                           if ev is None:
-                               return
-          +                if not self.is_running:
-          +                    continue  # stopped while this utterance was queued
-                           try:
-                               self._handle_final_event(ev)
-                           except Exception:  # pragma: no cover
-                               logger.exception("transcript handling failed")
-          +                if not self.is_running:
-          +                    # stop() arrived while this command was in flight: undo its lingering
-          +                    # on-screen / key-state effects (an already injected click or key cannot be recalled)
-          +                    try:
-          +                        self.overlay_service.hide_all()
-          +                        self.input_injector.release_all_modifiers()
-          +                    except Exception:  # pragma: no cover
-          +                        logger.exception("post-stop cleanup failed")
-
-                   self._dispatch_thread = threading.Thread(target=work, daemon=True, name="voxpilot-dispatch")
-                   self._dispatch_thread.start()
-          diff --git a/src/voxpilot/overlay/overlay_service.py b/src/voxpilot/overlay/overlay_service.py
-          index b8c2a4e..b58d197 100644
-          --- a/src/voxpilot/overlay/overlay_service.py
-          +++ b/src/voxpilot/overlay/overlay_service.py
-          @@ -599,19 +599,26 @@ class _GuiInvoker(QtCore.QObject):
-
-
-           def _marshal(fn):
-          +    """Run `fn` on the GUI thread. Off-thread callers are queued to it only while the app's
-          +    event loop is running (`gui_loop_running`). A queued job that has not started after the
-          +    timeout is cancelled (never run later, never run on the calling thread); the call then
-          +    returns None and logs. With no event loop (headless/tests) calls run in the caller's thread
-          +    exactly as before, since there is no GUI thread to hand off to."""
-               import functools
-
-               @functools.wraps(fn)
-               def wrapper(self, *args, **kwargs):
-                   invoker = getattr(self, "_invoker", None)
-          -        if invoker is None or threading.get_ident() == self._gui_ident:
-          +        if (invoker is None or threading.get_ident() == self._gui_ident
-          +                or not getattr(self, "gui_loop_running", False)):
-                       return fn(self, *args, **kwargs)
-          -        state = {"claimed": False, "done": threading.Event(), "result": None, "error": None}
-          +        state = {"claimed": False, "cancelled": False, "done": threading.Event(),
-          +                 "result": None, "error": None}
-                   lock = threading.Lock()
-
-                   def job():
-                       with lock:
-          -                if state["claimed"]:
-          +                if state["claimed"] or state["cancelled"]:
-                               return
-                           state["claimed"] = True
-                       try:
-          @@ -622,13 +629,13 @@ def _marshal(fn):
-                           state["done"].set()
-
-                   invoker.call.emit(job)
-          -        if not state["done"].wait(1.0):
-          +        if not state["done"].wait(3.0):
-                       with lock:
-                           if not state["claimed"]:
-          -                    # no GUI event loop is running (headless/tests): run inline as before
-          -                    state["claimed"] = True
-          -                    return fn(self, *args, **kwargs)
-          -            state["done"].wait(5.0)
-          +                    state["cancelled"] = True
-          +                    logger.error("GUI thread did not service overlay call %s; dropped", fn.__name__)
-          +                    return None
-          +            state["done"].wait(10.0)  # already running on the GUI thread; wait for it
-                   if state["error"] is not None:
-                       raise state["error"]
-                   return state["result"]
-          diff --git a/tests/test_targets_e2e.py b/tests/test_targets_e2e.py
-          index c22045f..d893900 100644
-          --- a/tests/test_targets_e2e.py
-          +++ b/tests/test_targets_e2e.py
-          @@ -51,7 +51,14 @@ def test_explorer_voice_control_e2e():
-               engine.start()
-
-               try:
-          -        elements = engine.element_provider.discover_elements()
-          +        # The Explorer window opens asynchronously (slow on CI runners): poll instead of one fixed sleep.
-          +        elements = []
-          +        deadline = time.time() + 25
-          +        while time.time() < deadline:
-          +            elements = engine.element_provider.discover_elements()
-          +            if elements:
-          +                break
-          +            time.sleep(1.0)
-                   assert len(elements) > 0
-                   print(f"\n[Explorer E2E] Discovered {len(elements)} elements in Explorer")
-
           diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
-          index 3f9ced4..7bbc96a 100644
+          index 7bbc96a..b87aac3 100644
           --- a/tests/test_voice_control_parity.py
           +++ b/tests/test_voice_control_parity.py
-          @@ -209,6 +209,7 @@ def test_overlay_calls_from_worker_thread_run_on_gui_thread() -> None:
-               from PySide6 import QtCore, QtWidgets
-               from voxpilot.overlay.overlay_service import OverlayService
-               ov = OverlayService()
-          +    ov.gui_loop_running = True
-               gui = threading.get_ident()
-               ran = []
-               orig = ov._canvas.hide
-          @@ -223,3 +224,54 @@ def test_overlay_calls_from_worker_thread_run_on_gui_thread() -> None:
-                   time.sleep(0.01)
-               t.join()
-               assert ran == [gui]
+          @@ -275,3 +275,28 @@ def test_stop_drops_queued_and_cleans_after_inflight(engine) -> None:
+                   time.sleep(0.05)
+               assert handled == ["one"]             # queued utterance never ran after stop
+               assert cleaned.count("hide") >= 2     # stop() cleanup plus post-in-flight cleanup
           +
           +
-          +def test_stalled_gui_thread_never_runs_call_inline_or_late() -> None:
-          +    """Loop flagged running but not serviced: the call is dropped, not run on the worker thread,
-          +    and does not run later when the GUI thread finally processes events."""
-          +    import threading
-          +    from PySide6 import QtWidgets
-          +    from voxpilot.overlay import overlay_service as osv
-          +    ov = osv.OverlayService()
-          +    ov.gui_loop_running = True
-          +    ran = []
-          +    orig = ov._canvas.hide
-          +    ov._canvas.hide = lambda: (ran.append(threading.get_ident()), orig())[1]
-          +    t = threading.Thread(target=ov.hide_all)
-          +    t.start()
-          +    t.join(8)  # GUI thread (this one) never services the queue during the wait
-          +    assert not t.is_alive()
-          +    assert ran == []                      # not executed inline on the worker
-          +    QtWidgets.QApplication.instance().processEvents()
-          +    assert ran == []                      # and not executed late (cancelled)
+          +def test_mic_test_command_reports_levels(tmp_path, monkeypatch, capsys) -> None:
+          +    """`mic-test` runs end to end against a fake capture device and writes its report."""
+          +    import numpy as np
+          +    from voxpilot.app import cli
+          +    from voxpilot.contracts.dto import AudioChunk
+          +    import voxpilot.speech.audio_capture as ac
           +
+          +    class FakeCap:
+          +        device_id, native_samplerate, native_channels = 3, 48000, 1
+          +        def __init__(self): self.n = 0
+          +        def start(self, device_id=None): pass
+          +        def stop(self): pass
+          +        def read_chunk(self, timeout=0.2):
+          +            self.n += 1
+          +            t = np.arange(800) / 16000.0
+          +            pcm = (0.3 * np.sin(2 * np.pi * 440 * t) * 32767).astype(np.int16)
+          +            return AudioChunk(data=pcm.tobytes())
           +
-          +def test_stop_drops_queued_and_cleans_after_inflight(engine) -> None:
-          +    import threading, time
-          +    from voxpilot.contracts.dto import TranscriptEvent
-          +    e, _, _ = engine
-          +    e.is_running = True
-          +    started, release, handled = threading.Event(), threading.Event(), []
-          +    cleaned = []
-          +
-          +    def handler(ev):
-          +        started.set()
-          +        release.wait(3)
-          +        handled.append(ev.text)
-          +
-          +    e._handle_final_event = handler
-          +    e.overlay_service = type("O", (), {"hide_all": lambda s: cleaned.append("hide"),
-          +                                       "stop_refresh": lambda s: None})()
-          +    e.input_injector.release_all_modifiers = lambda: cleaned.append("mods")
-          +    e._start_dispatch_worker()
-          +    e._on_transcript(TranscriptEvent(text="one", is_final=True))
-          +    started.wait(2)
-          +    e._on_transcript(TranscriptEvent(text="two", is_final=True))  # queued behind the in-flight one
-          +    e.stop()
-          +    release.set()
-          +    for _ in range(60):
-          +        if "hide" in cleaned[2:] or cleaned.count("hide") >= 2:
-          +            break
-          +        time.sleep(0.05)
-          +    assert handled == ["one"]             # queued utterance never ran after stop
-          +    assert cleaned.count("hide") >= 2     # stop() cleanup plus post-in-flight cleanup
+          +    monkeypatch.setattr(ac, "LiveAudioCapture", FakeCap)
+          +    assert cli.run_mic_test(1, None, str(tmp_path / "voxpilot-mic-test.txt")) == 0
+          +    out = capsys.readouterr().out
+          +    assert "Peak level: 0.3" in out
+          +    assert (tmp_path / "voxpilot-mic-test.txt").exists()
           PATCH_EOF
-          git apply --whitespace=nowarn vehicle/fix9.patch
+          git apply --whitespace=nowarn vehicle/fix10.patch
       - name: Setup and test
         shell: cmd
         run: setup_windows.bat
@@ -273,5 +174,5 @@ jobs:
           git config user.name "voxpilot-parity-bot"
           git config user.email "noreply@users.noreply.github.com"
           git add -A -- . ':!vehicle' ':!.venv' ':!models'
-          git commit -m "Safe GUI marshalling, post-stop cleanup, menu polish"
+          git commit -m "mic-test command, menu proportions"
           git push origin voxpilot-voice-control-parity
