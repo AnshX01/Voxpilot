@@ -1,4 +1,4 @@
-# run 8
+# run 9
 name: update-source-branch
 on:
   push:
@@ -20,10 +20,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply fix8 (inline patch)
+      - name: Apply fix9 (inline patch)
         shell: bash
         run: |
-          cat > vehicle/fix8.patch <<'PATCH_EOF'
+          cat > vehicle/fix9.patch <<'PATCH_EOF'
           diff --git a/src/voxpilot/app/tray.py b/src/voxpilot/app/tray.py
           index 226f484..4e31b48 100644
           --- a/src/voxpilot/app/tray.py
@@ -169,6 +169,26 @@ jobs:
                    if state["error"] is not None:
                        raise state["error"]
                    return state["result"]
+          diff --git a/tests/test_targets_e2e.py b/tests/test_targets_e2e.py
+          index c22045f..d893900 100644
+          --- a/tests/test_targets_e2e.py
+          +++ b/tests/test_targets_e2e.py
+          @@ -51,7 +51,14 @@ def test_explorer_voice_control_e2e():
+               engine.start()
+
+               try:
+          -        elements = engine.element_provider.discover_elements()
+          +        # The Explorer window opens asynchronously (slow on CI runners): poll instead of one fixed sleep.
+          +        elements = []
+          +        deadline = time.time() + 25
+          +        while time.time() < deadline:
+          +            elements = engine.element_provider.discover_elements()
+          +            if elements:
+          +                break
+          +            time.sleep(1.0)
+                   assert len(elements) > 0
+                   print(f"\n[Explorer E2E] Discovered {len(elements)} elements in Explorer")
+
           diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
           index 3f9ced4..7bbc96a 100644
           --- a/tests/test_voice_control_parity.py
@@ -237,7 +257,7 @@ jobs:
           +    assert handled == ["one"]             # queued utterance never ran after stop
           +    assert cleaned.count("hide") >= 2     # stop() cleanup plus post-in-flight cleanup
           PATCH_EOF
-          git apply --whitespace=nowarn vehicle/fix8.patch
+          git apply --whitespace=nowarn vehicle/fix9.patch
       - name: Setup and test
         shell: cmd
         run: setup_windows.bat
