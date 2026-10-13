@@ -1,4 +1,4 @@
-# run 6
+# run 7
 name: update-source-branch
 on:
   push:
@@ -20,33 +20,42 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply fix4 (inline patch)
+      - name: Apply fix5 (inline patch)
         shell: bash
         run: |
-          cat > vehicle/fix4.patch <<'PATCH_EOF'
-          From c534dad6d402ca83073ffe8fdb00a09ca27fade1 Mon Sep 17 00:00:00 2001
-          From: audit <a@b.c>
-          Date: Tue, 13 Oct 2026 22:03:15 +0530
-          Subject: [PATCH] Continuous listening: handle transcripts off the audio
-           thread; Apple-style round mode icons in tray menu
-
-          ---
-           src/voxpilot/app/tray.py           | 42 ++++++++++++++++++++++++++++++
-           src/voxpilot/engine.py             | 33 +++++++++++++++++++++++
-           tests/test_voice_control_parity.py | 27 +++++++++++++++++++
-           3 files changed, 102 insertions(+)
-
+          cat > vehicle/fix5.patch <<'PATCH_EOF'
           diff --git a/src/voxpilot/app/tray.py b/src/voxpilot/app/tray.py
-          index d50efc7..ef09265 100644
+          index ef09265..226f484 100644
           --- a/src/voxpilot/app/tray.py
           +++ b/src/voxpilot/app/tray.py
-          @@ -72,6 +72,44 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+          @@ -72,6 +72,48 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
                    ("Swift Mode", EngineMode.SWIFT),
                )
 
+          +    _MENU_QSS = """
+          +    QMenu { background: rgba(244,240,236,245); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
+          +            padding: 8px 6px; icon-size: 26px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
+          +    QMenu::item { padding: 6px 22px 6px 10px; border-radius: 6px; margin: 1px 4px; }
+          +    QMenu::item:selected { background: rgba(10,132,255,255); color: white; }
+          +    QMenu::item:disabled { color: #8e8a86; }
+          +    QMenu::separator { height: 1px; background: rgba(0,0,0,30); margin: 6px 14px; }
+          +    QMenu::indicator { width: 18px; height: 18px; }
+          +    """
+          +
           +    @staticmethod
-          +    def _mode_icon(kind: str, active: bool) -> QtGui.QIcon:
-          +        """Round icon like the guide's menu: blue circle when active, grey otherwise."""
+          +    def _add_header(menu, text: str, title: bool = False):
+          +        label = QtWidgets.QLabel(text)
+          +        label.setStyleSheet(
+          +            "padding: 4px 14px 2px 14px; background: transparent; "
+          +            + ("font-weight: 700; color: #1d1d1f;" if title else "font-weight: 600; color: #6e6a66;")
+          +        )
+          +        wa = QtWidgets.QWidgetAction(menu)
+          +        wa.setDefaultWidget(label)
+          +        menu.addAction(wa)
+          +        return wa
+          +
+          +    @staticmethod
+          +    def _speaker_icon(active: bool) -> QtGui.QIcon:
           +        px = QtGui.QPixmap(44, 44)
           +        px.fill(QtCore.Qt.transparent)
           +        p = QtGui.QPainter(px)
@@ -55,165 +64,214 @@ jobs:
           +        p.setBrush(QtGui.QColor(10, 132, 255) if active else QtGui.QColor(215, 210, 205))
           +        p.drawEllipse(2, 2, 40, 40)
           +        fg = QtGui.QColor(255, 255, 255) if active else QtGui.QColor(70, 66, 62)
-          +        p.setPen(QtGui.QPen(fg, 3, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
-          +        if kind == "mic":
-          +            p.setBrush(fg)
-          +            p.drawRoundedRect(18, 9, 8, 17, 4, 4)
-          +            p.setBrush(QtCore.Qt.NoBrush)
-          +            p.drawArc(13, 14, 18, 17, 180 * 16, 180 * 16)
-          +            p.drawLine(22, 31, 22, 36)
-          +        elif kind == "move":
-          +            for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
-          +                p.drawLine(22, 22, 22 + dx * 12, 22 + dy * 12)
-          +                ex, ey = 22 + dx * 12, 22 + dy * 12
-          +                p.drawLine(ex, ey, ex - dx * 4 + dy * 4, ey - dy * 4 + dx * 4)
-          +                p.drawLine(ex, ey, ex - dx * 4 - dy * 4, ey - dy * 4 - dx * 4)
-          +        else:
-          +            f = QtGui.QFont("Segoe UI", 17, QtGui.QFont.Bold)
-          +            p.setFont(f)
-          +            p.drawText(QtCore.QRect(0, 0, 44, 44), QtCore.Qt.AlignCenter, "A" if kind == "a" else "S")
+          +        p.setBrush(fg)
+          +        poly = QtGui.QPolygonF([QtCore.QPointF(11, 18), QtCore.QPointF(17, 18), QtCore.QPointF(24, 12),
+          +                                QtCore.QPointF(24, 32), QtCore.QPointF(17, 26), QtCore.QPointF(11, 26)])
+          +        p.drawPolygon(poly)
+          +        p.setBrush(QtCore.Qt.NoBrush)
+          +        p.setPen(QtGui.QPen(fg, 2.5, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
+          +        p.drawArc(22, 14, 10, 16, -60 * 16, 120 * 16)
           +        p.end()
           +        return QtGui.QIcon(px)
           +
-          +    _MODE_ICON_KIND = {EngineMode.DICTATION: "mic", EngineMode.COMMAND: "move",
-          +                       EngineMode.SPELLING: "a", EngineMode.SWIFT: "s"}
+               @staticmethod
+               def _mode_icon(kind: str, active: bool) -> QtGui.QIcon:
+                   """Round icon like the guide's menu: blue circle when active, grey otherwise."""
+          @@ -106,15 +148,21 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+               _MODE_ICON_KIND = {EngineMode.DICTATION: "mic", EngineMode.COMMAND: "move",
+                                  EngineMode.SPELLING: "a", EngineMode.SWIFT: "s"}
+
+          +    def _refresh_mic_icons(self) -> None:
+          +        for act in [self.mic_action] + list(getattr(self, "_mic_actions", [])):
+          +            act.setIcon(self._speaker_icon(act.isChecked()))
           +
-          +    def _refresh_mode_icons(self) -> None:
-          +        for mode, act in self.mode_actions.items():
-          +            act.setIcon(self._mode_icon(self._MODE_ICON_KIND[mode], act.isChecked()))
-          +
+               def _refresh_mode_icons(self) -> None:
+          +        if hasattr(self, "mic_action"):
+          +            self._refresh_mic_icons()
+                   for mode, act in self.mode_actions.items():
+                       act.setIcon(self._mode_icon(self._MODE_ICON_KIND[mode], act.isChecked()))
+
                def _create_menu(self) -> None:
                    menu = QtWidgets.QMenu()
                    self._menu = menu  # keep the Python wrapper alive; setContextMenu doesn't take ownership
-          @@ -94,6 +132,8 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-                       act.triggered.connect(lambda _=False, m=mode: self._set_mode(m))
-                       self.mode_actions[mode] = act
-                   self.mode_actions[EngineMode.DICTATION].setChecked(True)
-          +        self.mode_group.triggered.connect(lambda _a: self._refresh_mode_icons())
-          +        self._refresh_mode_icons()
+          -        title = menu.addAction("Voice Control")
+          -        title.setEnabled(False)
+          +        menu.setStyleSheet(self._MENU_QSS)
+          +        self._add_header(menu, "Voice Control", title=True)
                    menu.addSeparator()
-                   menu.addSection("Language")
-                   lang = menu.addAction("English")
-          @@ -128,6 +168,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-               def _set_mode(self, mode: EngineMode) -> None:
-                   self.engine.mode = mode
-                   self.mode_actions[mode].setChecked(True)
-          +        self._refresh_mode_icons()
-                   self.engine.overlay_service.update_hud(mode=mode, text=dict((m, l) for l, m in self.MODES)[mode])
-
-               @staticmethod
-          @@ -184,6 +225,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-                   self.stop_action.setEnabled(True)
+                   self.stop_action = menu.addAction("Stop Listening")
+                   self.stop_action.triggered.connect(self._stop_listening)
+          @@ -122,7 +170,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                   self.start_action.triggered.connect(self._start_listening)
                    self.start_action.setEnabled(False)
-                   self.mode_actions.get(self.engine.mode, self.mode_actions[EngineMode.DICTATION]).setChecked(True)
-          +        self._refresh_mode_icons()
-                   self.engine.overlay_service.update_hud(mode=self.engine.mode, text="Start listening")
+                   menu.addSeparator()
+          -        menu.addSection("Mode")
+          +        self._add_header(menu, "Mode")
+                   self.mode_group = QtGui.QActionGroup(menu)
+                   self.mode_actions = {}
+                   for label, mode in self.MODES:
+          @@ -135,12 +183,12 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                   self.mode_group.triggered.connect(lambda _a: self._refresh_mode_icons())
+                   self._refresh_mode_icons()
+                   menu.addSeparator()
+          -        menu.addSection("Language")
+          +        self._add_header(menu, "Language")
+                   lang = menu.addAction("English")
+                   lang.setCheckable(True)
+                   lang.setChecked(True)
+                   menu.addSeparator()
+          -        menu.addSection("Microphone")
+          +        self._add_header(menu, "Microphone")
+                   self.mic_group = QtGui.QActionGroup(menu)
+                   self.mic_group.setExclusive(True)
+                   self.mic_action = menu.addAction("Automatic (default microphone)")
+          @@ -148,6 +196,8 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                   self.mic_action.setChecked(True)
+                   self.mic_action.triggered.connect(lambda _=False: self._select_microphone(None))
+                   self.mic_group.addAction(self.mic_action)
+          +        self.mic_group.triggered.connect(lambda _a: self._refresh_mic_icons())
+          +        self._refresh_mic_icons()
+                   self._mic_actions = []
+                   self._selected_mic = None
+                   menu.aboutToShow.connect(self.refresh_microphones)
+          @@ -201,6 +251,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                       menu.insertAction(self._mic_anchor, act)
+                       self._mic_actions.append(act)
+                   self.mic_action.setChecked(self._selected_mic is None)
+          +        self._refresh_mic_icons()
 
-               def _open_commands_window(self) -> None:
+               def _select_microphone(self, device_id) -> None:
+                   self._selected_mic = device_id
           diff --git a/src/voxpilot/engine.py b/src/voxpilot/engine.py
-          index 60678ae..3c33a18 100644
+          index 3c33a18..3cd7bdf 100644
           --- a/src/voxpilot/engine.py
           +++ b/src/voxpilot/engine.py
-          @@ -86,6 +86,7 @@ class VoxPilotEngine:
-                   try:
-                       self._live_capture = LiveAudioCapture()
-                       self._live_capture.start(device_id=device_id)
-          +            self._start_dispatch_worker()
-                       self._capture_thread = threading.Thread(target=self._capture_worker, daemon=True)
-                       self._capture_thread.start()
-                       logger.info("Live microphone capture started successfully.")
-          @@ -95,6 +96,27 @@ class VoxPilotEngine:
-                       self._live_capture = None
-                       return False
-
-          +    def _start_dispatch_worker(self) -> None:
-          +        """Run command/dictation handling off the audio thread so mic capture never stalls
-          +        while a click, UIA scan or text injection is in progress (keeps listening continuous)."""
-          +        import queue as _q
-          +        if getattr(self, "_dispatch_thread", None) and self._dispatch_thread.is_alive():
-          +            return
-          +        self._dispatch_q = _q.Queue()
-          +
-          +        def work() -> None:
-          +            while True:
-          +                ev = self._dispatch_q.get()
-          +                if ev is None:
-          +                    return
-          +                try:
-          +                    self._handle_final_event(ev)
-          +                except Exception:  # pragma: no cover
-          +                    logger.exception("transcript handling failed")
-          +
-          +        self._dispatch_thread = threading.Thread(target=work, daemon=True, name="voxpilot-dispatch")
-          +        self._dispatch_thread.start()
-          +
-               def _capture_worker(self) -> None:
-                   while self.is_running and self._live_capture and self._live_capture.is_running:
-                       chunk = self._live_capture.read_chunk(timeout=0.2)
-          @@ -129,6 +151,10 @@ class VoxPilotEngine:
-               def stop(self) -> None:
-                   self.is_running = False
+          @@ -153,6 +153,11 @@ class VoxPilotEngine:
                    self.stop_live_capture()
-          +        q = getattr(self, "_dispatch_q", None)
-          +        if q is not None:
-          +            q.put(None)
-          +            self._dispatch_q = None
+                   q = getattr(self, "_dispatch_q", None)
+                   if q is not None:
+          +            try:
+          +                while True:
+          +                    q.get_nowait()  # drop utterances still pending at shutdown
+          +            except Exception:
+          +                pass
+                       q.put(None)
+                       self._dispatch_q = None
                    self.speech_engine.stop()
-                   stopper = getattr(self.overlay_service, "stop_refresh", None)
-                   if callable(stopper):
-          @@ -156,6 +182,13 @@ class VoxPilotEngine:
-                       self.overlay_service.update_hud(mode=self.mode, text=event.text)
-                       return
-
-          +        q = getattr(self, "_dispatch_q", None)
-          +        if q is not None and getattr(self, "_dispatch_thread", None) and self._dispatch_thread.is_alive():
-          +            q.put(event)
-          +            return
-          +        self._handle_final_event(event)
+          diff --git a/src/voxpilot/overlay/overlay_service.py b/src/voxpilot/overlay/overlay_service.py
+          index d368ec3..b8c2a4e 100644
+          --- a/src/voxpilot/overlay/overlay_service.py
+          +++ b/src/voxpilot/overlay/overlay_service.py
+          @@ -579,3 +579,77 @@ class OverlayService(IOverlayService):
+                       self._canvas.update()
+                       if self._app:
+                           self._app.processEvents()
           +
-          +    def _handle_final_event(self, event: TranscriptEvent) -> None:
-                   text = event.text.strip()
-                   if not text or text == "[unk]":
-                       return
+          +
+          +# -----------------------------------------------------------------------------
+          +# GUI-thread marshalling: Qt widgets may only be touched from the thread that owns
+          +# them. Speech/command handling runs on worker threads, so every mutating overlay
+          +# call made from another thread is queued to the GUI thread and waited for.
+          +# -----------------------------------------------------------------------------
+          +class _GuiInvoker(QtCore.QObject):
+          +    call = QtCore.Signal(object)
+          +
+          +    def __init__(self) -> None:
+          +        super().__init__()
+          +        self.call.connect(self._run, QtCore.Qt.QueuedConnection)
+          +
+          +    @QtCore.Slot(object)
+          +    def _run(self, job) -> None:
+          +        job()
+          +
+          +
+          +def _marshal(fn):
+          +    import functools
+          +
+          +    @functools.wraps(fn)
+          +    def wrapper(self, *args, **kwargs):
+          +        invoker = getattr(self, "_invoker", None)
+          +        if invoker is None or threading.get_ident() == self._gui_ident:
+          +            return fn(self, *args, **kwargs)
+          +        state = {"claimed": False, "done": threading.Event(), "result": None, "error": None}
+          +        lock = threading.Lock()
+          +
+          +        def job():
+          +            with lock:
+          +                if state["claimed"]:
+          +                    return
+          +                state["claimed"] = True
+          +            try:
+          +                state["result"] = fn(self, *args, **kwargs)
+          +            except BaseException as exc:  # pragma: no cover
+          +                state["error"] = exc
+          +            finally:
+          +                state["done"].set()
+          +
+          +        invoker.call.emit(job)
+          +        if not state["done"].wait(1.0):
+          +            with lock:
+          +                if not state["claimed"]:
+          +                    # no GUI event loop is running (headless/tests): run inline as before
+          +                    state["claimed"] = True
+          +                    return fn(self, *args, **kwargs)
+          +            state["done"].wait(5.0)
+          +        if state["error"] is not None:
+          +            raise state["error"]
+          +        return state["result"]
+          +
+          +    return wrapper
+          +
+          +
+          +_orig_init_qt = OverlayService._init_qt
+          +
+          +
+          +def _init_qt_with_invoker(self) -> None:
+          +    _orig_init_qt(self)
+          +    self._gui_ident = threading.get_ident()
+          +    self._invoker = _GuiInvoker()
+          +
+          +
+          +OverlayService._init_qt = _init_qt_with_invoker
+          +for _name in (
+          +    "show_numbers", "show_names", "hide_names", "show_grid", "show_text_numbers",
+          +    "hide_text_numbers", "show_disambiguation", "show_hud", "hide", "hide_numbers",
+          +    "hide_grid", "hide_all", "update_hud", "drill_down_grid", "undo_grid",
+          +):
+          +    if hasattr(OverlayService, _name):
+          +        setattr(OverlayService, _name, _marshal(getattr(OverlayService, _name)))
           diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
-          index 68cc4e1..4c64eb6 100644
+          index 4c64eb6..3f9ced4 100644
           --- a/tests/test_voice_control_parity.py
           +++ b/tests/test_voice_control_parity.py
-          @@ -174,3 +174,30 @@ def test_numbers_refresh_follows_the_screen(engine) -> None:
-               e.element_provider.discover_elements = lambda *a, **k: [el(1, 99)]
-               e._refresh_numbers()
-               assert shown == [[5], [99]]
+          @@ -201,3 +201,25 @@ def test_final_transcripts_are_handled_off_the_audio_thread(engine) -> None:
+                   time.sleep(0.05)
+               assert seen and seen[0][1] == "voxpilot-dispatch"
+               e.stop()
           +
           +
-          +def test_final_transcripts_are_handled_off_the_audio_thread(engine) -> None:
-          +    """A slow command must not block the thread feeding audio (continuous listening)."""
-          +    import threading, time
-          +    from voxpilot.contracts.dto import TranscriptEvent
-          +    e, _, _ = engine
-          +    e.is_running = True
-          +    seen = []
-          +    gate = threading.Event()
-          +
-          +    def slow(ev):
-          +        gate.wait(2)
-          +        seen.append((ev.text, threading.current_thread().name))
-          +
-          +    e._handle_final_event = slow
-          +    e._start_dispatch_worker()
-          +    t0 = time.perf_counter()
-          +    e._on_transcript(TranscriptEvent(text="hello world", is_final=True))
-          +    assert time.perf_counter() - t0 < 0.5  # returned immediately while handler is blocked
-          +    gate.set()
-          +    for _ in range(40):
-          +        if seen:
-          +            break
-          +        time.sleep(0.05)
-          +    assert seen and seen[0][1] == "voxpilot-dispatch"
-          +    e.stop()
-          -- 
-          2.34.1
+          +def test_overlay_calls_from_worker_thread_run_on_gui_thread() -> None:
+          +    """Overlay mutations made off the GUI thread are queued to it (Qt widgets are not thread-safe)."""
+          +    import threading
+          +    from PySide6 import QtCore, QtWidgets
+          +    from voxpilot.overlay.overlay_service import OverlayService
+          +    ov = OverlayService()
+          +    gui = threading.get_ident()
+          +    ran = []
+          +    orig = ov._canvas.hide
+          +    ov._canvas.hide = lambda: (ran.append(threading.get_ident()), orig())[1]
+          +    t = threading.Thread(target=ov.hide_all)
+          +    t.start()
+          +    app = QtWidgets.QApplication.instance()
+          +    import time
+          +    t0 = time.time()
+          +    while t.is_alive() and time.time() - t0 < 3:
+          +        app.processEvents()
+          +        time.sleep(0.01)
+          +    t.join()
+          +    assert ran == [gui]
           PATCH_EOF
-          git apply --whitespace=nowarn vehicle/fix4.patch
+          git apply --whitespace=nowarn vehicle/fix5.patch
       - name: Setup and test
         shell: cmd
         run: setup_windows.bat
@@ -229,5 +287,5 @@ jobs:
           git config user.name "voxpilot-parity-bot"
           git config user.email "noreply@users.noreply.github.com"
           git add -A -- . ':!vehicle' ':!.venv' ':!models'
-          git commit -m "Continuous listening off audio thread; mode icons"
+          git commit -m "GUI-thread overlay marshalling; Apple-style tray menu"
           git push origin voxpilot-voice-control-parity
