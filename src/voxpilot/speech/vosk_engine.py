@@ -46,10 +46,12 @@ BASE_COMMAND_VOCABULARY = [
     "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
     "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
     "hundred", "thousand",
-    # Discrete core command words
+    "show window numbers", "show window grid", "hide commands",
+    "start drag", "release", "scroll top", "scroll bottom", "scroll page up", "scroll page down",
     "show", "hide", "numbers", "number", "names", "grid", "double", "triple",
     "right", "left", "up", "down", "mode", "drag", "press", "hold", "scroll",
     "wake", "sleep", "start", "stop", "listening", "window", "app", "desktop",
+    "cursor", "mouse", "pixels", "top", "bottom", "release",
 ]
 
 

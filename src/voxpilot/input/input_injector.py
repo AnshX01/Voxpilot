@@ -595,6 +595,11 @@ class WindowsInputInjector:
             inp.u.ki.dwFlags = KEYEVENTF_KEYUP
             user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
+    def move_cursor_relative(self, dx: int, dy: int) -> None:
+        """Move cursor relative to current position by dx, dy pixels."""
+        cx, cy = self.get_cursor_position()
+        self.move_cursor(cx + dx, cy + dy)
+
     def _resolve_vk(self, key: str) -> int:
         k = key.lower().strip()
         if k in VK_MAP:

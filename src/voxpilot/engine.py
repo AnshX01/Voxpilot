@@ -4,6 +4,7 @@ Ties together Audio/FakeMic -> Speech Engine -> Command Parser -> Automation -> 
 """
 
 import ctypes
+from ctypes import wintypes
 import logging
 import threading
 import time
@@ -18,6 +19,7 @@ from voxpilot.contracts.dto import (
     BlockedReason,
     LabeledElement,
     MouseButton,
+    ScreenRect,
 )
 from voxpilot.speech import VoskSpeechEngine, LiveAudioCapture, FakeMic
 from voxpilot.commands import CommandParser, NumberParser
@@ -156,6 +158,29 @@ class VoxPilotEngine:
             return self._handle_show_numbers(intent, continuous=True)
         elif name == "HIDE_NUMBERS":
             return self._handle_hide_numbers(intent)
+        elif name == "SHOW_WINDOW_NUMBERS":
+            return self._handle_show_window_numbers(intent)
+        elif name == "SHOW_NAMES" or name == "SHOW_NAMES_CONTINUOUS":
+            return self._handle_show_names(intent)
+        elif name == "HIDE_NAMES":
+            return self._handle_hide_names(intent)
+        elif name == "CLICK":
+            self.input_injector.click(MouseButton.LEFT, count=1)
+            return CommandResult.success(intent=intent, message="Clicked cursor position")
+        elif name == "DOUBLE_CLICK":
+            self.input_injector.click(MouseButton.LEFT, count=2)
+            return CommandResult.success(intent=intent, message="Double clicked cursor position")
+        elif name == "TRIPLE_CLICK":
+            pos = self.input_injector.get_cursor_position()
+            self.input_injector.triple_click_at(pos[0], pos[1])
+            return CommandResult.success(intent=intent, message="Triple clicked cursor position")
+        elif name == "RIGHT_CLICK":
+            self.input_injector.click(MouseButton.RIGHT, count=1)
+            return CommandResult.success(intent=intent, message="Right clicked cursor position")
+        elif name == "LONG_PRESS":
+            pos = self.input_injector.get_cursor_position()
+            self.input_injector.long_press_at(pos[0], pos[1], duration_s=1.2)
+            return CommandResult.success(intent=intent, message="Long pressed cursor position")
         elif name == "CLICK_NUMBER":
             return self._handle_click_number(intent)
         elif name == "DOUBLE_CLICK_NUMBER":
@@ -168,6 +193,13 @@ class VoxPilotEngine:
             return self._handle_long_press_number(intent)
         elif name == "DRAG_NUMBER":
             return self._handle_drag_number(intent)
+        elif name == "START_DRAG_NUMBER":
+            return self._handle_start_drag_number(intent)
+        elif name == "DROP":
+            self.input_injector.mouse_up(MouseButton.LEFT)
+            return CommandResult.success(intent=intent, message="Dropped item")
+        elif name == "MOVE_CURSOR":
+            return self._handle_move_cursor(intent)
         elif name == "CLICK_NAME":
             return self._handle_click_name(intent)
         elif name == "SWITCH_TO_COMMAND_MODE":
@@ -182,6 +214,8 @@ class VoxPilotEngine:
             self.overlay_service.show_grid()
             self.overlay_service.update_hud(mode=self.mode, text="Grid Visible")
             return CommandResult.success(intent=intent, message="Grid displayed")
+        elif name == "SHOW_WINDOW_GRID":
+            return self._handle_show_window_grid(intent)
         elif name == "HIDE_GRID":
             self.overlay_service.hide_grid()
             self.overlay_service.update_hud(mode=self.mode, text="Grid Hidden")
@@ -217,6 +251,33 @@ class VoxPilotEngine:
             self.mode = EngineMode.COMMAND
             self.overlay_service.update_hud(mode=self.mode, text="Command Mode Active")
             return CommandResult.success(intent=intent, message="Switched to Command mode")
+        elif name == "SHOW_COMMANDS":
+            help_summary = "Voice Commands: show numbers, click <n>, double click <n>, triple click <n>, long press <n>, drag <n> to <m>, scroll down, dictation mode, sleep"
+            self.overlay_service.show_hud(help_summary, duration_ms=5000)
+            self.overlay_service.update_hud(mode=self.mode, text="Showing Commands")
+            return CommandResult.success(intent=intent, message="Displayed voice commands")
+        elif name == "HIDE_COMMANDS":
+            self.overlay_service.hide()
+            self.overlay_service.update_hud(mode=self.mode, text="Commands Hidden")
+            return CommandResult.success(intent=intent, message="Commands hidden")
+        elif name == "MUTE":
+            self.mode = EngineMode.SLEEP
+            self.overlay_service.hide_all()
+            self.overlay_service.update_hud(mode=self.mode, text="Microphone Muted")
+            return CommandResult.success(intent=intent, message="Microphone muted")
+        elif name == "UNMUTE":
+            self.mode = EngineMode.COMMAND
+            self.overlay_service.update_hud(mode=self.mode, text="Microphone Active")
+            return CommandResult.success(intent=intent, message="Microphone unmuted")
+        elif name == "DELETE_LAST_WORD":
+            self.input_injector.key_combination(["ctrl", "backspace"])
+            return CommandResult.success(intent=intent, message="Deleted last word")
+        elif name == "SCROLL_TOP":
+            self.input_injector.key_combination(["ctrl", "home"])
+            return CommandResult.success(intent=intent, message="Scrolled to top")
+        elif name == "SCROLL_BOTTOM":
+            self.input_injector.key_combination(["ctrl", "end"])
+            return CommandResult.success(intent=intent, message="Scrolled to bottom")
         elif name == "SNAP_WINDOW_LEFT":
             self.input_injector.key_combination(["win", "left"])
             return CommandResult.success(intent=intent, message="Snapped left")
@@ -513,6 +574,73 @@ class VoxPilotEngine:
             clicked_element=best_element.name,
             coordinates=(cx, cy),
         )
+
+    def _handle_show_window_numbers(self, intent: Intent) -> CommandResult:
+        primary_hwnd = self.element_provider._find_active_target_window()
+        elements = self.element_provider.discover_elements(window_handle=primary_hwnd)
+        self.overlay_service.show_numbers(elements, continuous=False)
+        self.overlay_service.update_hud(mode=self.mode, text=f"Labeled {len(elements)} window items")
+        return CommandResult.success(
+            intent=intent,
+            message=f"Displayed {len(elements)} window numbers",
+            element_count=len(elements),
+        )
+
+    def _handle_show_window_grid(self, intent: Intent) -> CommandResult:
+        hwnd = self.element_provider._find_active_target_window()
+        rect = wintypes.RECT()
+        sub_rect = None
+        if hwnd and user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            sub_rect = ScreenRect(rect.left, rect.top, max(1, rect.right - rect.left), max(1, rect.bottom - rect.top))
+        self.overlay_service.show_grid(sub_rect=sub_rect)
+        self.overlay_service.update_hud(mode=self.mode, text="Window Grid Visible")
+        return CommandResult.success(intent=intent, message="Window grid displayed")
+
+    def _handle_show_names(self, intent: Intent) -> CommandResult:
+        elements = self.element_provider.discover_elements()
+        self.overlay_service.show_names(elements)
+        self.overlay_service.update_hud(mode=self.mode, text=f"Labeled {len(elements)} names")
+        return CommandResult.success(
+            intent=intent,
+            message=f"Displayed {len(elements)} names",
+            element_count=len(elements),
+        )
+
+    def _handle_hide_names(self, intent: Intent) -> CommandResult:
+        self.overlay_service.hide_names()
+        self.overlay_service.update_hud(mode=self.mode, text="Names Hidden")
+        return CommandResult.success(intent=intent, message="Names hidden")
+
+    def _handle_start_drag_number(self, intent: Intent) -> CommandResult:
+        num = int(intent.slots.get("number", 1))
+        element = self.element_provider.get_element_by_id(num)
+        if element:
+            pt = element.rect.center()
+            self.input_injector.move_cursor(pt[0], pt[1])
+            time.sleep(0.02)
+            self.input_injector.mouse_down(MouseButton.LEFT)
+            return CommandResult.success(intent=intent, message=f"Started drag from #{num}")
+        return CommandResult(
+            status=CommandStatus.ELEMENT_GONE,
+            code="ERR_ELEMENT_NOT_FOUND",
+            message=f"No labeled element with number {num}",
+            matched_intent=intent,
+        )
+
+    def _handle_move_cursor(self, intent: Intent) -> CommandResult:
+        direction = str(intent.slots.get("direction", "right")).lower()
+        amount = int(intent.slots.get("amount", 50))
+        dx, dy = 0, 0
+        if direction == "up":
+            dy = -amount
+        elif direction == "down":
+            dy = amount
+        elif direction == "left":
+            dx = -amount
+        elif direction == "right":
+            dx = amount
+        self.input_injector.move_cursor_relative(dx, dy)
+        return CommandResult.success(intent=intent, message=f"Moved cursor {direction} by {amount}px")
 
     def _record_result(self, res: CommandResult) -> None:
         self._last_result = res

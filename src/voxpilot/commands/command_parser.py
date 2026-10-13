@@ -67,9 +67,21 @@ class CommandParser:
             {"intent": "TASK_VIEW", "patterns": [r"^task view$"]},
             {"intent": "NEXT_DESKTOP", "patterns": [r"^next desktop$"]},
             {"intent": "PREVIOUS_DESKTOP", "patterns": [r"^(?:previous|prior) desktop$"]},
-            {"intent": "PAGE_UP", "patterns": [r"^page up$"]},
-            {"intent": "PAGE_DOWN", "patterns": [r"^page down$"]},
+            {"intent": "PAGE_UP", "patterns": [r"^page up$", r"^scroll\s+page\s+up$"]},
+            {"intent": "PAGE_DOWN", "patterns": [r"^page down$", r"^scroll\s+page\s+down$"]},
             {"intent": "UNDO_GRID", "patterns": [r"^(?:zoom out|undo grid|back)$"]},
+            {"intent": "SHOW_WINDOW_NUMBERS", "patterns": [r"^(?:please\s+)?show\s+window\s+numbers?$", r"^window\s+numbers?$"]},
+            {"intent": "SHOW_WINDOW_GRID", "patterns": [r"^(?:please\s+)?show\s+window\s+grid$", r"^window\s+grid$"]},
+            {"intent": "SHOW_NAMES_CONTINUOUS", "patterns": [r"^(?:please\s+)?(?:show\s+names\s+continuously|keep\s+names\s+on)$", r"^names\s+continuously$"]},
+            {"intent": "HIDE_COMMANDS", "patterns": [r"^(?:please\s+)?hide\s+commands$"]},
+            {"intent": "CLICK", "patterns": [r"^(?:click|tap)$"]},
+            {"intent": "DOUBLE_CLICK", "patterns": [r"^(?:double\s+click|double\s+tap)$"]},
+            {"intent": "TRIPLE_CLICK", "patterns": [r"^(?:triple\s+click|triple\s+tap)$"]},
+            {"intent": "RIGHT_CLICK", "patterns": [r"^(?:right\s+click|control\s+click)$"]},
+            {"intent": "LONG_PRESS", "patterns": [r"^(?:long\s+press|press\s+and\s+hold|click\s+and\s+hold)$"]},
+            {"intent": "DROP", "patterns": [r"^(?:drop|release)$"]},
+            {"intent": "SCROLL_TOP", "patterns": [r"^(?:scroll\s+(?:to\s+)?top)$"]},
+            {"intent": "SCROLL_BOTTOM", "patterns": [r"^(?:scroll\s+(?:to\s+)?bottom)$"]},
         ]
 
     def normalize_number(self, phrase: str) -> Optional[int]:
@@ -116,6 +128,26 @@ class CommandParser:
             chord_tokens = m_chord.group(1).split()
             if len(chord_tokens) >= 2:
                 return Intent(name="KEY_COMBINATION", confidence=0.95, slots={"keys": chord_tokens}, raw_text=text)
+
+        # Check start drag e.g. "start drag 4", "pick up 4"
+        m_start_drag = re.match(r"^(?:please\s+)?(?:start\s+drag|pick\s+up)\s+(?:number\s+)?(.+)$", cleaned)
+        if m_start_drag:
+            target_str = m_start_drag.group(1).strip()
+            num = self.normalize_number(target_str)
+            if num is not None:
+                return Intent(name="START_DRAG_NUMBER", confidence=0.99, slots={"number": num}, raw_text=text)
+
+        # Check cursor movement e.g. "move cursor right 50 pixels", "move mouse down 100"
+        m_move = re.match(r"^(?:move\s+cursor|move\s+mouse)\s+(up|down|left|right)(?:\s+(.+?)(?:\s+pixels?)?)?$", cleaned)
+        if m_move:
+            dir_str = m_move.group(1).strip()
+            amt_str = m_move.group(2)
+            amount = 50
+            if amt_str:
+                parsed_amt = self.normalize_number(amt_str.strip())
+                if parsed_amt is not None:
+                    amount = parsed_amt
+            return Intent(name="MOVE_CURSOR", confidence=0.95, slots={"direction": dir_str, "amount": amount}, raw_text=text)
 
         # Check drag and drop e.g. "drag 4 to 12", "move 3 into 8"
         m_drag = re.match(r"^(?:please\s+)?(?:drag|move)\s+(?:number\s+)?(.+?)\s+(?:to|into|onto)\s+(?:number\s+)?(.+)$", cleaned)

@@ -157,14 +157,11 @@ class OverlayCanvas(QtWidgets.QWidget):
 
         # 2. Name Badges Mode
         elif self.mode == OverlayMode.NAMES:
-            green_bg = QtGui.QColor(30, 160, 80, 230)
             for el in self.elements:
                 name_text = el.name[:18] if el.name else f"Item {el.element_id}"
                 pix = self.name_badge_cache.get(name_text)
                 if not pix:
-                    pix = self._render_badge_pixmap(
-                        name_text, bg_color=green_bg
-                    )
+                    pix = self._render_badge_pixmap(name_text)
                     self.name_badge_cache[name_text] = pix
                 painter.drawPixmap(el.rect.x, el.rect.y, pix)
 
@@ -300,6 +297,21 @@ class OverlayService(IOverlayService):
             self._canvas.update()
             if self._app:
                 self._app.processEvents()
+
+    def hide_names(self) -> None:
+        """Clear label name badges from the display."""
+        if self._canvas:
+            self._canvas.mode = OverlayMode.OFF
+            self._current_mode = OverlayMode.OFF
+            self._canvas.elements.clear()
+            self._canvas.hide()
+            self._canvas.update()
+            if self._app:
+                self._app.processEvents()
+
+    def is_names_visible(self) -> bool:
+        """Check if name badges are currently visible."""
+        return self._current_mode == OverlayMode.NAMES
 
     def show_grid(
         self,

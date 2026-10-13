@@ -246,3 +246,116 @@ def test_macos_audio_capture_resampling_fidelity() -> None:
     assert t_resample_ms < 1.0  # Must be sub-millisecond
     pcm_bytes = (resampled * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
     assert len(pcm_bytes) == 1600  # 800 int16 samples * 2 bytes = 1600 bytes
+
+
+def test_macos_extended_commands_parsing() -> None:
+    """Verify parsing of macOS Voice Control window numbers, window grid, names, commands palette, and cursor gestures."""
+    parser = CommandParser()
+
+    assert parser.parse("show window numbers").name == "SHOW_WINDOW_NUMBERS"
+    assert parser.parse("window numbers").name == "SHOW_WINDOW_NUMBERS"
+    assert parser.parse("show window grid").name == "SHOW_WINDOW_GRID"
+    assert parser.parse("window grid").name == "SHOW_WINDOW_GRID"
+
+    assert parser.parse("show names").name == "SHOW_NAMES"
+    assert parser.parse("hide names").name == "HIDE_NAMES"
+    assert parser.parse("show names continuously").name == "SHOW_NAMES_CONTINUOUS"
+
+    assert parser.parse("show commands").name == "SHOW_COMMANDS"
+    assert parser.parse("what can i say").name == "SHOW_COMMANDS"
+    assert parser.parse("hide commands").name == "HIDE_COMMANDS"
+
+    assert parser.parse("click").name == "CLICK"
+    assert parser.parse("tap").name == "CLICK"
+    assert parser.parse("double click").name == "DOUBLE_CLICK"
+    assert parser.parse("triple click").name == "TRIPLE_CLICK"
+    assert parser.parse("right click").name == "RIGHT_CLICK"
+    assert parser.parse("control click").name == "RIGHT_CLICK"
+    assert parser.parse("long press").name == "LONG_PRESS"
+
+    start_drag = parser.parse("start drag 8")
+    assert start_drag.name == "START_DRAG_NUMBER"
+    assert start_drag.slots["number"] == 8
+
+    assert parser.parse("drop").name == "DROP"
+    assert parser.parse("release").name == "DROP"
+
+    mv = parser.parse("move cursor right 75 pixels")
+    assert mv.name == "MOVE_CURSOR"
+    assert mv.slots["direction"] == "right"
+    assert mv.slots["amount"] == 75
+
+    assert parser.parse("mute").name == "MUTE"
+    assert parser.parse("unmute").name == "UNMUTE"
+    assert parser.parse("delete last word").name == "DELETE_LAST_WORD"
+    assert parser.parse("scroll top").name == "SCROLL_TOP"
+    assert parser.parse("scroll bottom").name == "SCROLL_BOTTOM"
+
+
+def test_macos_extended_engine_dispatch() -> None:
+    """Verify engine execution of extended macOS Voice Control commands."""
+    mock_injector = MagicMock()
+    mock_injector.get_cursor_position.return_value = (500, 400)
+    mock_overlay = MagicMock()
+    mock_overlay.is_continuous_numbers.return_value = False
+    mock_provider = MagicMock()
+    mock_provider._find_active_target_window.return_value = 1234
+    test_el = LabeledElement(element_id=2, name="OK", control_type="Button", rect=ScreenRect(200, 300, 50, 20), window_handle=1234)
+    mock_provider.get_element_by_id.return_value = test_el
+    mock_provider.discover_elements.return_value = [test_el]
+
+    engine = VoxPilotEngine(
+        element_provider=mock_provider,
+        overlay_service=mock_overlay,
+        input_injector=mock_injector,
+    )
+
+    # 1. Click without args
+    res = engine.dispatch_intent(Intent(name="CLICK"))
+    assert res.status == CommandStatus.SUCCESS
+    mock_injector.click.assert_called_with(MouseButton.LEFT, count=1)
+
+    # 2. Right click without args
+    res = engine.dispatch_intent(Intent(name="RIGHT_CLICK"))
+    assert res.status == CommandStatus.SUCCESS
+    mock_injector.click.assert_called_with(MouseButton.RIGHT, count=1)
+
+    # 3. Triple click without args
+    res = engine.dispatch_intent(Intent(name="TRIPLE_CLICK"))
+    assert res.status == CommandStatus.SUCCESS
+    mock_injector.triple_click_at.assert_called_with(500, 400)
+
+    # 4. Long press without args
+    res = engine.dispatch_intent(Intent(name="LONG_PRESS"))
+    assert res.status == CommandStatus.SUCCESS
+    mock_injector.long_press_at.assert_called_with(500, 400, duration_s=1.2)
+
+    # 5. Start drag
+    res = engine.dispatch_intent(Intent(name="START_DRAG_NUMBER", slots={"number": 2}))
+    assert res.status == CommandStatus.SUCCESS
+    mock_injector.mouse_down.assert_called_with(MouseButton.LEFT)
+
+    # 6. Drop
+    res = engine.dispatch_intent(Intent(name="DROP"))
+    assert res.status == CommandStatus.SUCCESS
+    mock_injector.mouse_up.assert_called_with(MouseButton.LEFT)
+
+    # 7. Move cursor relative
+    res = engine.dispatch_intent(Intent(name="MOVE_CURSOR", slots={"direction": "right", "amount": 60}))
+    assert res.status == CommandStatus.SUCCESS
+    mock_injector.move_cursor_relative.assert_called_with(60, 0)
+
+    # 8. Show names & Hide names
+    res_names = engine.dispatch_intent(Intent(name="SHOW_NAMES"))
+    assert res_names.status == CommandStatus.SUCCESS
+    mock_overlay.show_names.assert_called_with([test_el])
+
+    res_hide_names = engine.dispatch_intent(Intent(name="HIDE_NAMES"))
+    assert res_hide_names.status == CommandStatus.SUCCESS
+    mock_overlay.hide_names.assert_called_once()
+
+    # 9. Show commands
+    res_cmds = engine.dispatch_intent(Intent(name="SHOW_COMMANDS"))
+    assert res_cmds.status == CommandStatus.SUCCESS
+    mock_overlay.show_hud.assert_called_once()
+
