@@ -1,4 +1,4 @@
-# run 2
+# run 3
 name: update-source-branch
 on:
   push:
@@ -22,12 +22,11 @@ jobs:
           python-version: "3.11"
       - name: Apply update patch
         shell: pwsh
-        run: git apply --whitespace=nowarn vehicle/1-fix2.patch
+        run: git apply --whitespace=nowarn vehicle/2-fix2.patch
       - name: Setup and test
         shell: cmd
         run: setup_windows.bat
       - name: Tests
-        continue-on-error: true
         shell: cmd
         env:
           PYTHONPATH: src
