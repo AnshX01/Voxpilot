@@ -1,0 +1,9 @@
+numpy
+PySide6
+psutil
+vosk
+uiautomation
+comtypes
+sounddevice
+faster-whisper
+pytest
