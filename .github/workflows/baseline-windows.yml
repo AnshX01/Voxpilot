@@ -1,0 +1,28 @@
+name: baseline-windows
+on:
+  workflow_dispatch:
+  push:
+    branches: [voxpilot-parity-windows-test]
+    paths: [".github/workflows/baseline-windows.yml"]
+jobs:
+  pytest:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install pytest numpy PySide6 psutil vosk uiautomation comtypes sounddevice faster-whisper
+      - name: Download Vosk model
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip -OutFile m.zip
+          Expand-Archive m.zip models
+      - name: Run tests
+        env:
+          PYTHONPATH: src
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests --tb=short
