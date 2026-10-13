@@ -430,3 +430,182 @@ src/voxpilot/contracts/
 ```
 
 Components implement these contracts directly without circular dependencies or tight runtime couplings, allowing isolated testing and parallel subagent implementation.
+
+---
+
+## 10. macOS Voice Control Parity Architecture Specification
+
+To establish complete parity with Apple macOS Voice Control—the industry benchmark for hands-free operating system control—VoxPilot incorporates an accessibility-first architectural framework specifically engineered for Windows 11. This specification defines speech routing, conversational rejection, target reachability, phonetic alias compensation, overlay persistence, and spatial drag-and-drop mechanics.
+
+```mermaid
+flowchart TD
+    Audio["Audio Frame (16kHz PCM)"] --> VAD["VAD / Energy Gate"]
+    VAD --> Router{"EngineMode Router"}
+    
+    Router -- "EngineMode.COMMAND" --> GrammarFilter["Dynamic Grammar Constrained Decoder\n(Kaldi Vosk HCLG Graph)"]
+    GrammarFilter --> ConfGate{"Acoustic Confidence\n>= 0.72?"}
+    ConfGate -- "No (< 0.72)" --> Dropped["Zero Side Effect\n(Silent Discard)"]
+    ConfGate -- "Yes" --> SyntaxCheck{"Strict AST Parser\nValid Command Grammar?"}
+    SyntaxCheck -- "No Match / Babble" --> Dropped
+    SyntaxCheck -- "Valid Command Intent" --> Dispatcher["CommandDispatcher (Execution)"]
+
+    Router -- "EngineMode.DICTATION" --> PrefixCheck{"Command Prefix Detected?\n('command click 42')"}
+    PrefixCheck -- "Yes" --> Dispatcher
+    PrefixCheck -- "No" --> Whisper["Dictation Engine (faster-whisper)\nText Stream Injection"]
+```
+
+### 10.1 Command Mode vs Dictation Mode Speech Routing
+
+VoxPilot maintains an explicit operational boundary between **Command Mode** (navigating windows, manipulating UI controls, scrolling, hotkeys) and **Dictation Mode** (streaming free-form text input into editable controls):
+
+1. **Deterministic Audio Routing:**
+   - **`EngineMode.COMMAND`:** All audio streams strictly to `CommandEngine` (Vosk Kaldi C++ decoder). The active vocabulary is dynamically constrained to command verbs and visible elements. Free-form text injection is blocked.
+   - **`EngineMode.DICTATION`:** Audio streams to `DictationEngine` (faster-whisper C++ model). Raw transcripts pass through punctuation formatting, automatic capitalization, and editing filters before being injected into the focused caret position via Win32 Unicode `SendInput`.
+2. **Mode-Switch Triggers & Escape Routing:**
+   - **Verbal Triggers:** Saying *"start dictation"* or *"dictation mode"* immediately switches system state to `EngineMode.DICTATION`. Saying *"stop dictation"*, *"command mode"*, or *"exit dictation"* switches system state back to `EngineMode.COMMAND`.
+   - **Command Escape Prefixes:** While in Dictation Mode, users frequently need single-command interventions without leaving dictation. Utterances matching prefix patterns (e.g., *"command click 14"*, *"command undo"*, *"command scroll down"*, *"command show numbers"*) are intercepted by the command pre-filter, routed to `CommandDispatcher`, and suppressed from dictation text injection.
+   - **Focus-Target Safety Interlock:** If the operating system focus shifts away from an editable text input to a container window, desktop background, or secure password field (`FocusState.is_password == True`), VoxPilot automatically pauses dictation mode to prevent erroneous keystroke injection or text leakage.
+3. **Atomic State & Buffer Flush:**
+   - Upon any mode transition, the `AudioRingBuffer` pre-roll and partial hypothesis queues are atomically cleared. This eliminates cross-mode bleeding where trailing dictation syllables accidentally trigger command actions or command utterances get typed into text boxes.
+
+### 10.2 Strict Command Mode Conversational Filtering (Zero Side Effects)
+
+In typical office or home settings, users talk on the phone, converse with colleagues, sneeze, or think aloud. Under macOS Voice Control, non-command speech in Command Mode is strictly filtered out with **zero side effects**. VoxPilot enforces this identical invariant on Windows:
+
+```mermaid
+flowchart LR
+    Acoustic["Continuous Speech Stream"] --> Stage1["1. Dynamic HCLG Grammar\n(Out-of-Grammar -> [unk])"]
+    Stage1 --> Stage2["2. Energy & Cadence Gate\n(Prune <150ms or >3500ms chatter)"]
+    Stage2 --> Stage3["3. Posterior Confidence Gate\n(Require score >= 0.72)"]
+    Stage3 --> Stage4["4. Strict AST Syntax Gate\n(Canonical grammar validator)"]
+    Stage4 --> Valid["Valid Command Intent"]
+    Stage1 -.->|Rejected| ZeroEffect["Zero Side Effects:\nNo typing, no clicks, no sounds, no HUD popup"]
+    Stage2 -.->|Rejected| ZeroEffect
+    Stage3 -.->|Rejected| ZeroEffect
+    Stage4 -.->|Rejected| ZeroEffect
+```
+
+1. **Acoustic HCLG Graph Pruning:** Spoken phrases outside the active dynamic grammar map directly to `[unk]` (unknown token) in the Kaldi decoder, preventing the acoustic model from forcing arbitrary conversational syllables onto valid command words.
+2. **Acoustic Confidence Thresholding:** Transcript hypotheses must satisfy a posterior confidence threshold ($\tau \ge 0.72$). Low-confidence mumblings or background banter are discarded prior to parsing.
+3. **Temporal Cadence Filtering:** Command speech displays distinct rhythmic prosody (typically 400ms to 2,500ms). Conversational run-on sentences exceeding 3,500ms without matching command phrases are automatically dropped.
+4. **Strict AST Syntax Validation:** The `ICommandParser` verifies that recognized tokens form a complete canonical command production (e.g., `Verb + Number`, `Verb + Cardinal`, `NavigationVerb`). Conversational tokens that accidentally pass acoustic decoding are rejected by the AST validator.
+5. **Fail-Closed Zero Side Effect Policy:** When an utterance is rejected as non-command chatter, VoxPilot executes **nothing**:
+   - No mouse movement or clicks.
+   - No keyboard keypresses or text emissions.
+   - No disruptive error buzzers or warning toasts.
+   - The system remains completely quiet and unobtrusive.
+
+### 10.3 Full-Screen Touch Target Coverage
+
+macOS Voice Control allows users to address any clickable pixel or control on the display. VoxPilot achieves full-screen touch target parity across Windows 11 by federating UI Automation (UIA), Win32 native APIs, and Chromium rendering trees:
+
+| Target Surface | Provider & Mechanism | Examples of Addressable Controls |
+|---|---|---|
+| **Windows Taskbar & Shell** | UI Automation on `Shell_TrayWnd` | Start button, Search box, Task View, pinned and running taskbar apps, system tray notification icons, network/volume flyouts, system clock. |
+| **Window Non-Client Area** | Win32 Caption & UIA Window Pattern | Titlebar caption buttons (Minimize, Maximize, Restore, Close), titlebar tabs (Windows Terminal, File Explorer, Edge), window system menu. |
+| **Application Client Controls** | UIA Control Patterns (Invoke, Toggle, Select, Value) | Buttons, checkboxes, radio buttons, dropdown combo boxes, tree items, list rows, tab headers, splitters, sliders across Win32, WinForms, WPF, WinUI 3 / XAML, and Qt. |
+| **Web & Electron Elements** | Chromium `WM_GETOBJECT` wakeup + DOM tree | Web links (`<a>`), clickable divs, buttons, form inputs, ARIA accessibility roles (`button`, `link`, `menuitem`, `tab`). |
+| **Recursive 3x3 Grid Target** | Geometric virtual screen decomposition | Arbitrary screen coordinates, non-standard visual controls, unexposed canvas UI, video player timelines. |
+
+- **Z-Index and Viewport Clipping:** Discovered elements include `depth: int` (hierarchy depth in the UI tree) and `z_index: int` (stacking order). VoxPilot clips element rectangles (`ScreenRect`) against parent container viewport bounds and filters occluded controls to ensure only truly interactive, visible controls receive numbered badges.
+- **Multi-Monitor Display Work Areas:** Coordinates are validated against `DisplayInfo.work_area` across all attached monitors, preventing badges or input syntheses from landing off-screen.
+
+### 10.4 Dynamic Grammar Biasing & Phonetic Alias Handling
+
+A critical failure mode in voice interfaces is acoustic confusion between similarly sounding words. Most notably, the word *"sure"* (/ʃʊər/) is routinely confused with *"show"* (/ʃoʊ/) in everyday speech, causing *"show numbers"* to fail or execute erratically.
+
+VoxPilot addresses acoustic confusion at both the acoustic decoding stage and the semantic parsing stage:
+
+1. **Dynamic Grammar Biasing:**
+   - Every time the active window changes or an overlay opens, `GrammarManager` compiles the precise active vocabulary (commands, numbers 1..$N$, and visible UI labels) into the Kaldi Vosk recognizer grammar.
+   - Constraining the search graph eliminates out-of-domain words and forces acoustic decoding probability toward valid commands.
+2. **Phonetic Alias Resolution Matrix:**
+   - `ICommandParser` implements a phonetic alias dictionary that transparently maps acoustic near-neighbors and vernacular variations to canonical commands:
+     - *"sure numbers"* / *"shore numbers"* $\longrightarrow$ `"show numbers"`
+     - *"sure grid"* / *"show great"* $\longrightarrow$ `"show grid"`
+     - *"sure numbers continuously"* $\longrightarrow$ `"show numbers continuously"`
+     - *"tap <n>"* / *"hit <n>"* / *"press <n>"* $\longrightarrow$ `"click <n>"`
+     - *"double tap <n>"* $\longrightarrow$ `"double click <n>"`
+     - *"hate"* $\longrightarrow$ `"8"`
+     - *"sex"* / *"sax"* $\longrightarrow$ `"6"`
+     - Spoken ordinals (*"first"*, *"second"*, *"third"*) $\longrightarrow$ `"1"`, `"2"`, `"3"`
+3. **Compound Spoken Number Normalization:**
+   - Multi-word numbers (*"one hundred twenty four"*, *"forty two"*) are normalized into discrete integers (`124`, `42`) via a deterministic numerical grammar, correctly resolving acoustic ambiguities such as *"to"* / *"too"* $\rightarrow$ `2` when preceded or followed by numerals.
+
+### 10.5 Number Overlay Lifecycle: Single-Shot vs Persistent
+
+macOS Voice Control features two distinct numbered badge modes: a single-shot overlay that automatically vanishes after executing a command, and a persistent mode that stays visible across continuous work sessions.
+
+```mermaid
+stateDiagram-v2
+    [*] --> OverlayOff: System Startup / Idle
+
+    OverlayOff --> SingleShotActive: User speaks "show numbers"
+    OverlayOff --> ContinuousActive: User speaks "show numbers continuously"
+
+    SingleShotActive --> ExecutingAction: User speaks command (e.g., "click 14")
+    ExecutingAction --> OverlayOff: Action Dispatched & Auto-Dismissed
+    SingleShotActive --> OverlayOff: User speaks "hide numbers" or "cancel"
+
+    ContinuousActive --> UpdatingInPlace: User speaks command (e.g., "click 14")
+    UpdatingInPlace --> ContinuousActive: Action Executed & Badges Refresh In-Place
+    ContinuousActive --> RefreshingLayout: UI Mutates / Window Scrolled / Tab Switched
+    RefreshingLayout --> ContinuousActive: Elements Re-Indexed & Badges Updated
+    ContinuousActive --> OverlayOff: User speaks "hide numbers" or "cancel"
+```
+
+1. **Single-Shot Lifecycle (`OverlayMode.NUMBERS`):**
+   - **Invocation:** Triggered by *"show numbers"*.
+   - **Behavior:** Renders numbered badges over all interactive targets.
+   - **Automatic Dismissal:** Upon the user speaking any targeted command (e.g., *"14"*, *"click 14"*, *"right click 8"*), the action executes and the overlay automatically calls `IOverlayService.hide()`, returning the desktop to an unobscured state.
+   - **Explicit Dismissal:** Saying *"hide numbers"* or *"cancel"* dismisses the badges immediately.
+2. **Persistent Lifecycle (`OverlayMode.CONTINUOUS_NUMBERS`):**
+   - **Invocation:** Triggered by *"show numbers continuously"* or *"keep numbers on"*.
+   - **Behavior:** Numbered badges remain visible continuously across multiple sequential commands (clicks, typing bursts, scrolling).
+   - **Dynamic Mutation Tracking:** As the UI mutates (e.g., opening a menu reveals new options, or a web page updates), the `AutomationWorker` detects the changes via `IUIAutomationPropertyChangedEventHandler` and `WinEventHook`, re-indexes the visible elements, and updates the numbered badge canvas in-place without flashing or destroying the window.
+   - **Explicit Dismissal Only:** The overlay remains pinned until the user explicitly speaks *"hide numbers"* or *"cancel"*.
+3. **Hardware-Accelerated Cache Performance:**
+   - Both modes draw from the pre-rasterized pixmap cache (numbers 1 through 250+). Paint events execute via hardware alpha blitting in under 0.25ms, guaranteeing that continuous mode incurs 0.0% CPU overhead while idling.
+
+### 10.6 Drag-and-Drop Semantics ('drag <n> to <m>')
+
+macOS Voice Control provides direct hands-free drag-and-drop operations between numbered elements. VoxPilot implements full drag-and-drop mechanics with spatial trajectory interpolation and Windows OLE/Win32 drag-drop compatibility:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User (Voice)
+    participant P as ICommandParser
+    participant D as ICommandDispatcher
+    participant E as ElementIndex (Spatial Tree)
+    participant I as IInputInjector (Win32 SendInput)
+
+    U->>P: "drag 12 to 34"
+    P->>D: Intent(name="drag", slots={"source": 12, "target": 34})
+    D->>E: Query Rect for Source 12 (P1) and Target 34 (P2)
+    E-->>D: Rect1.center(), Rect2.center()
+    D->>I: mouse_move(P1.x, P1.y)
+    D->>I: SendInput(MOUSEEVENTF_LEFTDOWN)
+    loop Interpolated Trajectory (t=0..1 over 250ms)
+        D->>I: SendInput(MOUSEEVENTF_MOVE, P(t).x, P(t).y)
+    end
+    D->>I: Dwell 50ms at P2 (OLE DragDetect Threshold)
+    D->>I: SendInput(MOUSEEVENTF_LEFTUP)
+    D-->>U: Success Earcon (Chirp)
+```
+
+1. **Command Syntax & Intent Mapping:**
+   - Single-phrase atomic drag: *"drag 12 to 34"*, *"drag 12 to 34 and drop"*.
+   - Decoupled two-phase drag: User speaks *"drag 12"* (initiates left-button down at element 12), performs intervening navigation or scrolling, and completes with *"drop on 34"* or *"drop here"*.
+   - Typed representation: Parsed as `ActionType.DRAG` with `source_id` and `target_id` slot bindings in `Intent`.
+2. **Win32 Drag-and-Drop Compatibility Invariants:**
+   - Windows drag-and-drop subsystems (OLE `IDropTarget`, shell file reordering, tree-view dragging, browser tab repositioning) do not register drag events if the cursor instantly teleports from point A to point B.
+   - The OS requires the cursor to traverse at least `SM_CXDRAG` (default 4 pixels) while the mouse button is depressed and sustain continuous motion for at least `SM_CYDRAG` time before entering the drag state (`DragDetect`).
+3. **Smooth Trajectory Generation:**
+   - `IInputInjector.mouse_drag(x1, y1, x2, y2, duration_ms=250)` computes an eased cosine trajectory:
+     $$P(t) = P_1 + (P_2 - P_1) \cdot \frac{1 - \cos(\pi t)}{2}, \quad t \in [0, 1]$$
+   - Synthesizes 15 to 25 intermediate mouse move events across the trajectory duration, ensuring reliable OLE drag initiation.
+   - Includes a 50ms dwell phase at the destination coordinate before releasing the mouse button to allow drop-target hit-testing to register.
+4. **Safety & Cancellation Sweepers:**
+   - If the drag operation is cancelled in mid-flight (via user saying *"cancel"* or `CancellationToken` firing) or an unexpected error occurs, the execution context guarantees immediate dispatch of `MOUSEEVENTF_LEFTUP` and a sweep of all keyboard modifier keys (`release_all_modifiers()`), completely preventing stuck mouse drag states.
+

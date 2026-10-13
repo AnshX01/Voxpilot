@@ -118,13 +118,30 @@ def test_labeled_element():
         rect=rect,
         window_handle=123456,
         stability_key="sha256_mock_key",
-        supported_actions=[ActionType.CLICK, ActionType.FOCUS],
+        supported_actions=[
+            ActionType.CLICK,
+            ActionType.DOUBLE_CLICK,
+            ActionType.TRIPLE_CLICK,
+            ActionType.LONG_PRESS,
+            ActionType.DRAG,
+            ActionType.FOCUS,
+        ],
+        is_focused=True,
+        depth=3,
+        z_index=10,
     )
     assert elem.element_id == 42
     assert elem.name == "Submit Button"
     assert elem.rect.center() == (60, 25)
     assert ActionType.CLICK in elem.supported_actions
+    assert ActionType.TRIPLE_CLICK in elem.supported_actions
+    assert ActionType.LONG_PRESS in elem.supported_actions
+    assert ActionType.DRAG in elem.supported_actions
     assert not elem.is_password
+    assert elem.is_focused is True
+    assert elem.depth == 3
+    assert elem.z_index == 10
+    assert OverlayMode.CONTINUOUS_NUMBERS.value == "continuous_numbers"
 
 
 def test_command_result_factories():

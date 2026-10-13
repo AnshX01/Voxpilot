@@ -20,15 +20,19 @@ An exhaustive catalog of all built-in voice commands, variations, arguments, and
 
 | Command Intent | Primary Phrases & Synonyms | Action / Description |
 |---|---|---|
-| `SHOW_NUMBERS` | `"show numbers"`, `"please show numbers"`, `"numbers on"`, `"show numbers everywhere"` | Discovers all interactive UI controls and displays amber badge numbers. |
-| `HIDE_NUMBERS` | `"hide numbers"`, `"numbers off"`, `"hide the numbers"`, `"remove numbers"` | Dismisses all numbered element badges. |
-| `SHOW_NAMES` | `"show names"`, `"names on"` | Displays element badges with accessible name text instead of numbers. |
+| `SHOW_NUMBERS` | `"show numbers"`, `"show number"`, `"sure numbers"`, `"numbers on"`, `"display numbers"`, `"numbers"` | Discovers all interactive UI controls across the desktop/screen and displays numbered badges (single-shot: auto-hides on click). |
+| `SHOW_NUMBERS_CONTINUOUS` | `"show numbers continuously"`, `"numbers continuously"`, `"keep numbers on"`, `"show numbers permanently"` | Displays numbers persistently across multiple clicks/commands until `"hide numbers"` is spoken (macOS Voice Control standard). |
+| `HIDE_NUMBERS` | `"hide numbers"`, `"numbers off"`, `"hide the numbers"`, `"remove numbers"` | Dismisses all numbered element badges and exits continuous mode. |
+| `SHOW_NAMES` | `"show names"`, `"show item names"`, `"names on"` | Displays element badges with accessible name text instead of numbers. |
 | `HIDE_NAMES` | `"hide names"`, `"names off"` | Dismisses name badges. |
-| `CLICK_NUMBER` | `"<number>"`, `"click <number>"`, `"hit <number>"`, `"press <number>"` (e.g. `"12"`, `"click twelve"`, `"click 5"`) | Clicks the center point of the specified element ID immediately without confirmation. |
-| `DOUBLE_CLICK_NUMBER` | `"double click <number>"`, `"double click five"` | Performs a fast double-click on the specified element. |
-| `RIGHT_CLICK_NUMBER` | `"right click <number>"`, `"right click seven"` | Performs a right-click to open context menus. |
+| `CLICK_NUMBER` | `"<number>"`, `"click <number>"`, `"choose <number>"`, `"tap <number>"`, `"press <number>"` (e.g. `"12"`, `"tap five"`, `"choose 7"`) | Clicks the center point of the specified element ID immediately without confirmation. |
+| `DOUBLE_CLICK_NUMBER` | `"double click <number>"`, `"double tap <number>"` | Performs a fast double-click on the specified element. |
+| `TRIPLE_CLICK_NUMBER` | `"triple click <number>"`, `"triple tap <number>"` | Performs a fast triple-click on the specified element (e.g. to select paragraph/line). |
+| `RIGHT_CLICK_NUMBER` | `"right click <number>"`, `"control click <number>"` | Performs a right-click to open context menus. |
+| `LONG_PRESS_NUMBER` | `"long press <number>"`, `"press and hold <number>"`, `"click and hold <number>"` | Holds the mouse button down for 1.0 second on the target before releasing. |
+| `DRAG_NUMBER` | `"drag <n> to <m>"`, `"move <n> into <m>"`, `"drag <n> onto <m>"` (e.g. `"drag 3 to 18"`) | Synthesizes smooth cosine-eased drag-and-drop from element n to element m. |
 | `CLICK_NAME` | `"click <name>"`, `"click save"`, `"click submit"`, `"click search"` | Clicks the best fuzzy-matched interactive element sharing the spoken name. |
-| `SCROLL` | `"scroll down"`, `"scroll up"`, `"scroll down 3"`, `"scroll down a bit"` | Synthesizes mouse wheel scroll events (default 120 units; multiplies by numeric factor if given). |
+| `SCROLL` | `"scroll down"`, `"scroll up"`, `"scroll left"`, `"scroll right"` | Synthesizes mouse wheel scroll events (default 120 units; multiplies by numeric factor if given). |
 
 ---
 

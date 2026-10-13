@@ -97,24 +97,34 @@ class OverlayCanvas(QtWidgets.QWidget):
     def _render_badge_pixmap(
         self,
         text: str,
-        bg_color: QtGui.QColor = QtGui.QColor(24, 119, 242, 235),
+        bg_color: QtGui.QColor = QtGui.QColor(22, 24, 28, 235),
         text_color: QtGui.QColor = QtGui.QColor(255, 255, 255),
+        border_color: QtGui.QColor = QtGui.QColor(255, 255, 255, 90),
     ) -> QtGui.QPixmap:
         font = QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold)
-        pen = QtGui.QPen(QtGui.QColor(0, 0, 0, 200), 1.0)
-
-        w = max(24, 14 + len(text) * 7)
-        h = 18
+        fm = QtGui.QFontMetrics(font)
+        text_w = fm.horizontalAdvance(text)
+        w = max(24, text_w + 14)
+        h = 20
         pix = QtGui.QPixmap(w, h)
         pix.fill(QtCore.Qt.transparent)
         p = QtGui.QPainter(pix)
         p.setRenderHint(QtGui.QPainter.Antialiasing)
         p.setFont(font)
-        p.setPen(pen)
+
+        # Subtle drop shadow for crisp legibility over light and dark backgrounds
+        p.setBrush(QtGui.QColor(0, 0, 0, 110))
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawRoundedRect(1, 2, w - 2, h - 2, 4, 4)
+
+        # Dark high-contrast badge background with 1px silver border
         p.setBrush(bg_color)
-        p.drawRoundedRect(0, 0, w - 1, h - 1, 3, 3)
+        p.setPen(QtGui.QPen(border_color, 1.0))
+        p.drawRoundedRect(0, 0, w - 1, h - 2, 4, 4)
+
+        # Pure white text
         p.setPen(text_color)
-        p.drawText(0, 0, w, h, QtCore.Qt.AlignCenter, text)
+        p.drawText(0, 0, w, h - 2, QtCore.Qt.AlignCenter, text)
         p.end()
         return pix
 
@@ -135,8 +145,8 @@ class OverlayCanvas(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
 
-        # 1. Number Badges Mode
-        if self.mode == OverlayMode.NUMBERS:
+        # 1. Number Badges Mode (Single-shot or Continuous)
+        if self.mode in (OverlayMode.NUMBERS, OverlayMode.CONTINUOUS_NUMBERS):
             for el in self.elements:
                 key = str(el.element_id)
                 pix = self.badge_cache.get(key)
@@ -192,24 +202,40 @@ class OverlayCanvas(QtWidgets.QWidget):
                     painter.drawText(rx + 12, ry + 32, str(num))
                     num += 1
 
-        # 5. Floating HUD Toast Bar (Top Right)
+        # 5. Floating HUD Toast Pill (macOS-Style Centered at Screen Top)
         if self.hud_text or self.hud_mode:
-            hud_rect = QtCore.QRect(1480, 12, 420, 38)
-            painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 160), 1))
-            painter.setBrush(QtGui.QColor(20, 22, 28, 230))
-            painter.drawRoundedRect(hud_rect, 6, 6)
+            pill_w = 420
+            pill_h = 36
+            pill_x = max(20, (self.width() - pill_w) // 2)
+            pill_y = 12
+            hud_rect = QtCore.QRect(pill_x, pill_y, pill_w, pill_h)
 
-            # Mode indicator pill
+            # Drop shadow
+            painter.setBrush(QtGui.QColor(0, 0, 0, 90))
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.drawRoundedRect(pill_x + 1, pill_y + 2, pill_w, pill_h, 18, 18)
+
+            # High-contrast dark pill with subtle white border
+            painter.setBrush(QtGui.QColor(22, 24, 28, 235))
+            painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 60), 1))
+            painter.drawRoundedRect(hud_rect, 18, 18)
+
+            # Mic status dot
             mode_color = QtGui.QColor(0, 230, 130)
             if self.hud_mode == "DICTATION":
                 mode_color = QtGui.QColor(70, 160, 255)
             elif self.hud_mode == "SLEEP":
                 mode_color = QtGui.QColor(160, 160, 170)
 
+            painter.setBrush(mode_color)
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.drawEllipse(pill_x + 14, pill_y + 11, 14, 14)
+
+            # Mode indicator text
             painter.setPen(mode_color)
-            font = QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold)
-            painter.setFont(font)
-            painter.drawText(1495, 36, f"[{self.hud_mode}]")
+            font_mode = QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold)
+            painter.setFont(font_mode)
+            painter.drawText(pill_x + 36, pill_y + 23, f"{self.hud_mode}")
 
             # Message text
             msg_color = QtGui.QColor(245, 245, 245)
@@ -221,8 +247,8 @@ class OverlayCanvas(QtWidgets.QWidget):
             painter.setPen(msg_color)
             font_msg = QtGui.QFont("Segoe UI", 9)
             painter.setFont(font_msg)
-            display_msg = self.hud_text[:42] if self.hud_text else "Listening..."
-            painter.drawText(1580, 36, display_msg)
+            display_msg = self.hud_text[:36] if self.hud_text else "Listening..."
+            painter.drawText(pill_x + 135, pill_y + 23, display_msg)
 
 
 class OverlayService(IOverlayService):
@@ -232,6 +258,7 @@ class OverlayService(IOverlayService):
         self._app: Optional[QtWidgets.QApplication] = None
         self._canvas: Optional[OverlayCanvas] = None
         self._current_mode: OverlayMode = OverlayMode.OFF
+        self._is_continuous_numbers: bool = False
         self._init_qt()
 
     def _init_qt(self) -> None:
@@ -249,12 +276,15 @@ class OverlayService(IOverlayService):
         self,
         elements: list[LabeledElement],
         duration_ms: Optional[int] = None,
+        continuous: bool = False,
     ) -> None:
-        """Render numbered badges over the provided elements."""
+        """Render numbered badges over the provided elements (single-shot or continuous)."""
         if self._canvas:
+            self._is_continuous_numbers = continuous
+            mode = OverlayMode.CONTINUOUS_NUMBERS if continuous else OverlayMode.NUMBERS
             self._canvas.elements = elements
-            self._canvas.mode = OverlayMode.NUMBERS
-            self._current_mode = OverlayMode.NUMBERS
+            self._canvas.mode = mode
+            self._current_mode = mode
             self._canvas.show()
             self._canvas.update()
             if self._app:
@@ -405,7 +435,8 @@ class OverlayService(IOverlayService):
     # -------------------------------------------------------------------------
 
     def hide_numbers(self) -> None:
-        if self._current_mode == OverlayMode.NUMBERS:
+        self._is_continuous_numbers = False
+        if self._current_mode in (OverlayMode.NUMBERS, OverlayMode.CONTINUOUS_NUMBERS):
             self.hide()
 
     def hide_grid(self) -> None:
@@ -413,10 +444,14 @@ class OverlayService(IOverlayService):
             self.hide()
 
     def hide_all(self) -> None:
+        self._is_continuous_numbers = False
         self.hide()
 
     def is_numbers_visible(self) -> bool:
-        return self._current_mode == OverlayMode.NUMBERS
+        return self._current_mode in (OverlayMode.NUMBERS, OverlayMode.CONTINUOUS_NUMBERS)
+
+    def is_continuous_numbers(self) -> bool:
+        return self._is_continuous_numbers or self._current_mode == OverlayMode.CONTINUOUS_NUMBERS
 
     def is_grid_visible(self) -> bool:
         return self._current_mode == OverlayMode.GRID

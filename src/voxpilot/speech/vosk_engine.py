@@ -15,10 +15,48 @@ from voxpilot.contracts.errors import AudioDeviceError
 
 DEFAULT_MODEL_DIR = "models/vosk-model-small-en-us-0.15"
 
+BASE_COMMAND_VOCABULARY = [
+    # Top-level control phrases
+    "show numbers", "show number", "hide numbers", "hide number",
+    "show numbers continuously", "numbers continuously", "keep numbers on", "show numbers permanently",
+    "show names", "hide names", "show item names", "names on", "names off",
+    "show grid", "hide grid", "screen grid", "window grid", "grid on", "grid off",
+    "show commands", "what can i say",
+    "wake up", "start listening", "go to sleep", "stop listening", "sleep",
+    "command mode", "switch to command mode",
+    "dictation mode", "switch to dictation mode", "start dictation", "stop dictation",
+    "mute", "unmute",
+    # Interaction actions
+    "click", "double click", "triple click", "right click", "control click",
+    "long press", "press and hold", "click and hold", "tap", "choose", "press",
+    "drag", "to", "into", "move", "drop",
+    "scroll up", "scroll down", "scroll left", "scroll right",
+    "zoom in", "zoom out", "undo", "undo that", "scratch that", "redo",
+    # Keypresses & text manipulation
+    "press enter", "enter", "press escape", "escape", "cancel",
+    "press tab", "tab", "press backspace", "backspace", "delete character", "delete last word",
+    "copy", "copy that", "cut", "cut that", "paste", "paste that", "select all",
+    # Window & system controls
+    "close window", "close app", "minimize window", "minimize", "maximize window", "maximize", "restore window",
+    "show desktop", "snap window left", "snap window right", "snap window up", "snap window down",
+    "switch app", "switch window", "alt tab", "task view", "next desktop", "previous desktop",
+    "page up", "page down",
+    # Digits and numbers (words and common compounds)
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+    "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    "hundred", "thousand",
+    # Discrete core command words
+    "show", "hide", "numbers", "number", "names", "grid", "double", "triple",
+    "right", "left", "up", "down", "mode", "drag", "press", "hold", "scroll",
+    "wake", "sleep", "start", "stop", "listening", "window", "app", "desktop",
+]
+
+
 class VoskSpeechEngine:
     """Streaming, grammar-biased offline speech recognition engine."""
 
-    def __init__(self, model_path: str = DEFAULT_MODEL_DIR) -> None:
+    def __init__(self, model_path: str = DEFAULT_MODEL_DIR, use_command_grammar: bool = True) -> None:
         self.model_path = model_path
         if not os.path.isdir(self.model_path):
             raise FileNotFoundError(f"Vosk model not found at {self.model_path}")
@@ -26,7 +64,8 @@ class VoskSpeechEngine:
         self._recognizer: Optional[vosk.KaldiRecognizer] = None
         self._callbacks: List[Callable[[TranscriptEvent], None]] = []
         self._is_running = False
-        self._grammar_phrases: Optional[List[str]] = None
+        self._use_command_grammar = use_command_grammar
+        self._grammar_phrases: Optional[List[str]] = list(BASE_COMMAND_VOCABULARY) if use_command_grammar else None
         self._sample_rate = 16000
         self._words_recognized = 0
         self._chunks_processed = 0
@@ -38,7 +77,9 @@ class VoskSpeechEngine:
 
     def _reinit_recognizer(self) -> None:
         if self._grammar_phrases:
-            grammar_json = json.dumps(self._grammar_phrases + ["[unk]"])
+            # Construct distinct vocabulary with [unk] token for unconstrained non-command speech filtering
+            vocab = sorted(list({p.lower().strip() for p in self._grammar_phrases if p.strip()}))
+            grammar_json = json.dumps(vocab + ["[unk]"])
             self._recognizer = vosk.KaldiRecognizer(self._model, self._sample_rate, grammar_json)
         else:
             self._recognizer = vosk.KaldiRecognizer(self._model, self._sample_rate)
@@ -46,12 +87,13 @@ class VoskSpeechEngine:
 
     def set_grammar(self, phrases: List[str]) -> None:
         """Update grammar in real time to bias recognition toward on-screen elements and commands."""
-        cleaned = []
+        base = list(BASE_COMMAND_VOCABULARY) if self._use_command_grammar else []
+        combined = set(base)
         for p in phrases:
             c = p.lower().strip()
             if c:
-                cleaned.append(c)
-        self._grammar_phrases = cleaned
+                combined.add(c)
+        self._grammar_phrases = sorted(list(combined))
         if self._is_running:
             self._reinit_recognizer()
 

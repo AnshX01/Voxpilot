@@ -30,6 +30,16 @@ ACTIONABLE_CONTROL_TYPES = {
     auto.ControlType.ComboBoxControl: [ActionType.CLICK, ActionType.EXPAND],
     auto.ControlType.SplitButtonControl: [ActionType.CLICK],
     auto.ControlType.ListItemControl: [ActionType.CLICK, ActionType.SELECT],
+    auto.ControlType.TreeItemControl: [ActionType.CLICK, ActionType.SELECT, ActionType.EXPAND],
+    auto.ControlType.MenuBarControl: [ActionType.CLICK],
+    auto.ControlType.MenuControl: [ActionType.CLICK],
+    auto.ControlType.HeaderItemControl: [ActionType.CLICK],
+    auto.ControlType.ThumbControl: [ActionType.CLICK, ActionType.DRAG],
+    auto.ControlType.SliderControl: [ActionType.CLICK, ActionType.DRAG],
+    auto.ControlType.SpinnerControl: [ActionType.CLICK],
+    auto.ControlType.ToolBarControl: [ActionType.CLICK],
+    auto.ControlType.ImageControl: [ActionType.CLICK],
+    auto.ControlType.CustomControl: [ActionType.CLICK],
 }
 
 class UiaElementProvider:
@@ -97,33 +107,57 @@ class UiaElementProvider:
         self._ensure_desktop_attached()
         comtypes.CoInitialize()
         try:
-            target_hwnd = window_handle or self._find_active_target_window()
-            if not target_hwnd or not user32.IsWindow(target_hwnd):
+            target_windows: List[int] = []
+            if window_handle is not None:
+                if not user32.IsWindow(window_handle):
+                    return
+                target_windows.append(window_handle)
+            else:
+                primary = self._find_active_target_window()
+                if primary and user32.IsWindow(primary):
+                    target_windows.append(primary)
+                # Include taskbar to ensure dock/system tray elements are fully numbered like macOS
+                taskbar_hwnd = user32.FindWindowW("Shell_TrayWnd", None)
+                if taskbar_hwnd and user32.IsWindow(taskbar_hwnd) and taskbar_hwnd not in target_windows:
+                    target_windows.append(taskbar_hwnd)
+
+            if not target_windows:
                 return
 
-            cls_buf = ctypes.create_unicode_buffer(256)
-            user32.GetClassNameW(target_hwnd, cls_buf, 256)
-            if "Chrome_WidgetWin" in cls_buf.value:
-                self.activate_chromium_accessibility(target_hwnd)
-                time.sleep(0.05)
-
-            root_ctrl = auto.ControlFromHandle(target_hwnd)
-            if not root_ctrl:
-                return
-
-            elem_id = 1
+            raw_elements: List[LabeledElement] = []
             t_start = time.perf_counter()
 
-            for ctrl, depth in auto.WalkControl(root_ctrl, maxDepth=max_depth):
+            for target_hwnd in target_windows:
                 if (time.perf_counter() - t_start) * 1000 > timeout_ms:
                     break
 
-                ctype = ctrl.ControlType
-                if ctype in ACTIONABLE_CONTROL_TYPES or (ctrl.Name and ctype != auto.ControlType.PaneControl):
+                cls_buf = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(target_hwnd, cls_buf, 256)
+                if "Chrome_WidgetWin" in cls_buf.value:
+                    self.activate_chromium_accessibility(target_hwnd)
+                    time.sleep(0.05)
+
+                root_ctrl = auto.ControlFromHandle(target_hwnd)
+                if not root_ctrl:
+                    continue
+
+                for ctrl, depth in auto.WalkControl(root_ctrl, maxDepth=max_depth):
+                    if (time.perf_counter() - t_start) * 1000 > timeout_ms:
+                        break
+
+                    ctype = ctrl.ControlType
+                    is_actionable = (
+                        ctype in ACTIONABLE_CONTROL_TYPES
+                        or (ctrl.Name and ctype != auto.ControlType.PaneControl)
+                        or getattr(ctrl, "IsKeyboardFocusable", False)
+                    )
+                    if not is_actionable:
+                        continue
+
                     bbox = ctrl.BoundingRectangle
                     width = bbox.width()
                     height = bbox.height()
-                    if width <= 0 or height <= 0:
+                    if width <= 4 or height <= 4:
                         continue
 
                     if ctrl.IsOffscreen:
@@ -143,7 +177,7 @@ class UiaElementProvider:
                         pass
 
                     labeled = LabeledElement(
-                        element_id=elem_id,
+                        element_id=0,
                         name=name,
                         control_type=ctrl.ControlTypeName,
                         rect=rect,
@@ -154,11 +188,50 @@ class UiaElementProvider:
                         supported_actions=actions,
                         class_name=ctrl.ClassName,
                         automation_id=ctrl.AutomationId,
+                        depth=depth,
                     )
-                    out_list.append(labeled)
-                    elem_id += 1
+                    raw_elements.append(labeled)
 
-            self._cached_hwnd = target_hwnd
+            # De-duplication: drop duplicate / container elements with overlapping bounding boxes
+            filtered: List[LabeledElement] = []
+            for el in raw_elements:
+                duplicate = False
+                for existing in filtered:
+                    if (
+                        abs(el.rect.x - existing.rect.x) <= 4
+                        and abs(el.rect.y - existing.rect.y) <= 4
+                        and abs(el.rect.width - existing.rect.width) <= 8
+                        and abs(el.rect.height - existing.rect.height) <= 8
+                    ):
+                        duplicate = True
+                        break
+                if not duplicate:
+                    filtered.append(el)
+
+            # Sort natural reading order: top-to-bottom, left-to-right (macOS Voice Control standard)
+            filtered.sort(key=lambda e: (e.rect.y // 25, e.rect.x))
+
+            # Renumber sequentially starting from 1
+            for idx, el in enumerate(filtered, start=1):
+                renumbered = LabeledElement(
+                    element_id=idx,
+                    name=el.name,
+                    control_type=el.control_type,
+                    rect=el.rect,
+                    window_handle=el.window_handle,
+                    runtime_id=el.runtime_id,
+                    stability_key=el.stability_key,
+                    is_password=el.is_password,
+                    supported_actions=el.supported_actions,
+                    class_name=el.class_name,
+                    automation_id=el.automation_id,
+                    is_focused=el.is_focused,
+                    depth=el.depth,
+                    z_index=el.z_index,
+                )
+                out_list.append(renumbered)
+
+            self._cached_hwnd = target_windows[0] if target_windows else 0
             self._cache_timestamp = time.time()
 
         finally:

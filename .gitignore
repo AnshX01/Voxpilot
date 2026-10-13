@@ -48,3 +48,13 @@ Desktop.ini
 .coverage
 .pytest_cache/
 htmlcov/
+
+# Subagent Directory Ownership Junctions
+src/VoxPilot.Automation/
+src/VoxPilot.Commands/
+src/VoxPilot.Input/
+src/VoxPilot.Overlay/
+src/VoxPilot.Speech/
+src/VoxPilot.Dictation/
+src/VoxPilot.App/
+src/VoxPilot.NativeHost/

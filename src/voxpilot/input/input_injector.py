@@ -5,6 +5,7 @@ Implements: IInputInjector
 """
 
 import ctypes
+import math
 import time
 from typing import Tuple, List, Optional
 from voxpilot.contracts.dto import MouseButton, ScrollDirection
@@ -110,7 +111,10 @@ VK_MAP = {
     "f9": 0x78, "f10": 0x79, "f11": 0x7A, "f12": 0x7B,
 }
 
-MODIFIER_VKS = [0x10, 0x11, 0x12, 0x5B, 0x5C]
+MODIFIER_VKS = [
+    0x10, 0x11, 0x12,        # VK_SHIFT, VK_CONTROL, VK_MENU (Alt)
+    0x5B, 0x5C,              # VK_LWIN, VK_RWIN
+]
 
 class WindowsInputInjector:
     """Hardware-level SendInput injector with multi-monitor coordinate normalization."""
@@ -188,13 +192,44 @@ class WindowsInputInjector:
         inp.u.mi.dwFlags = flag
         user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
+    def release_all_mouse_buttons(self) -> None:
+        """Ensure all standard mouse buttons (Left, Right, Middle) are in released state."""
+        self._ensure_desktop_attached()
+        for btn in (MouseButton.LEFT, MouseButton.RIGHT, MouseButton.MIDDLE):
+            try:
+                self.mouse_up(btn)
+            except Exception:
+                pass
+
     def click(self, button: MouseButton = MouseButton.LEFT, count: int = 1) -> None:
-        for i in range(count):
-            self.mouse_down(button)
-            time.sleep(0.02)
-            self.mouse_up(button)
-            if i < count - 1:
-                time.sleep(0.05)
+        button_down = False
+        try:
+            for i in range(count):
+                self.mouse_down(button)
+                button_down = True
+                time.sleep(0.02)
+                self.mouse_up(button)
+                button_down = False
+                if i < count - 1:
+                    time.sleep(0.05)
+        except BaseException:
+            if button_down:
+                try:
+                    self.mouse_up(button)
+                except Exception:
+                    pass
+                button_down = False
+            try:
+                self.release_all_modifiers()
+            except Exception:
+                pass
+            raise
+        finally:
+            if button_down:
+                try:
+                    self.mouse_up(button)
+                except Exception:
+                    pass
 
     def click_at(
         self,
@@ -212,6 +247,91 @@ class WindowsInputInjector:
             time.sleep(0.02)
             self.move_cursor(orig_x, orig_y)
 
+    def triple_click_at(self, x: int, y: int) -> None:
+        """Synthesizes 3 consecutive left-clicks at (x, y) with proper Win32 timing.
+
+        Ensures fail-safe modifier releases and mouse button up releases if interrupted.
+        """
+        self._ensure_desktop_attached()
+        button_down = False
+        try:
+            self.move_cursor(x, y)
+            time.sleep(0.02)
+
+            dbl_ms = 500
+            try:
+                val = user32.GetDoubleClickTime()
+                if val > 0:
+                    dbl_ms = val
+            except Exception:
+                pass
+
+            # Interval between clicks must be comfortably below system double click time
+            inter_click_delay = min(0.04, max(0.01, (dbl_ms / 1000.0) / 10.0))
+            press_delay = 0.02
+
+            for i in range(3):
+                self.mouse_down(MouseButton.LEFT)
+                button_down = True
+                time.sleep(press_delay)
+                self.mouse_up(MouseButton.LEFT)
+                button_down = False
+                if i < 2:
+                    time.sleep(inter_click_delay)
+
+        except BaseException:
+            if button_down:
+                try:
+                    self.mouse_up(MouseButton.LEFT)
+                except Exception:
+                    pass
+                button_down = False
+            try:
+                self.release_all_modifiers()
+            except Exception:
+                pass
+            raise
+        finally:
+            if button_down:
+                try:
+                    self.mouse_up(MouseButton.LEFT)
+                except Exception:
+                    pass
+
+    def long_press_at(self, x: int, y: int, duration_s: float = 1.0) -> None:
+        """Synthesizes mouse move to (x, y), left button down, hold for duration_s, and left button up.
+
+        Ensures fail-safe modifier releases and mouse button up releases if interrupted.
+        """
+        self._ensure_desktop_attached()
+        button_down = False
+        try:
+            self.move_cursor(x, y)
+            time.sleep(0.02)
+            self.mouse_down(MouseButton.LEFT)
+            button_down = True
+            time.sleep(max(0.0, float(duration_s)))
+            self.mouse_up(MouseButton.LEFT)
+            button_down = False
+        except BaseException:
+            if button_down:
+                try:
+                    self.mouse_up(MouseButton.LEFT)
+                except Exception:
+                    pass
+                button_down = False
+            try:
+                self.release_all_modifiers()
+            except Exception:
+                pass
+            raise
+        finally:
+            if button_down:
+                try:
+                    self.mouse_up(MouseButton.LEFT)
+                except Exception:
+                    pass
+
     def drag(
         self,
         start_x: int,
@@ -221,13 +341,103 @@ class WindowsInputInjector:
         button: MouseButton = MouseButton.LEFT,
         duration_ms: int = 300,
     ) -> None:
-        self.move_cursor(start_x, start_y)
-        time.sleep(0.03)
-        self.mouse_down(button)
-        time.sleep(0.03)
-        self.move_cursor(end_x, end_y, smooth=True, duration_ms=duration_ms)
-        time.sleep(0.03)
-        self.mouse_up(button)
+        button_down = False
+        try:
+            self.move_cursor(start_x, start_y)
+            time.sleep(0.03)
+            self.mouse_down(button)
+            button_down = True
+            time.sleep(0.03)
+            self.move_cursor(end_x, end_y, smooth=True, duration_ms=duration_ms)
+            time.sleep(0.03)
+            self.mouse_up(button)
+            button_down = False
+        except BaseException:
+            if button_down:
+                try:
+                    self.mouse_up(button)
+                except Exception:
+                    pass
+                button_down = False
+            try:
+                self.release_all_modifiers()
+            except Exception:
+                pass
+            raise
+        finally:
+            if button_down:
+                try:
+                    self.mouse_up(button)
+                except Exception:
+                    pass
+
+    def drag_and_drop(
+        self,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        duration_s: float = 0.3,
+    ) -> None:
+        """Synthesizes smooth cosine-eased drag from (x1, y1) to (x2, y2) to trigger
+        OLE IDropTarget and Windows drag-and-drop detection.
+
+        Ensures fail-safe modifier releases and mouse button up releases if interrupted.
+        """
+        self._ensure_desktop_attached()
+        button_down = False
+        try:
+            # 1. Position cursor at drag origin and allow target window to process hover/focus
+            self.move_cursor(x1, y1)
+            time.sleep(0.02)
+
+            # 2. Press left button down to start drag interaction
+            self.mouse_down(MouseButton.LEFT)
+            button_down = True
+            time.sleep(0.02)
+
+            # 3. Smooth cosine-eased trajectory
+            duration = max(0.0, float(duration_s))
+            step_interval = 0.010  # ~10ms step interval for ~100Hz smooth injection
+            steps = max(int(round(duration / step_interval)), 10) if duration > 0 else 1
+            step_sleep = duration / steps if duration > 0 else 0.0
+
+            for i in range(1, steps + 1):
+                t = i / steps
+                # Cosine easing formula: (1 - cos(pi * t)) / 2 gives smooth ease-in and ease-out
+                progress = (1.0 - math.cos(math.pi * t)) / 2.0
+                cur_x = int(round(x1 + (x2 - x1) * progress))
+                cur_y = int(round(y1 + (y2 - y1) * progress))
+                self.move_cursor(cur_x, cur_y)
+                if step_sleep > 0:
+                    time.sleep(step_sleep)
+
+            # 4. Settle at destination to allow OLE IDropTarget::DragOver / DragEnter to update drop effect
+            time.sleep(0.03)
+
+            # 5. Release left button to complete drop (IDropTarget::Drop)
+            self.mouse_up(MouseButton.LEFT)
+            button_down = False
+            time.sleep(0.02)
+
+        except BaseException:
+            if button_down:
+                try:
+                    self.mouse_up(MouseButton.LEFT)
+                except Exception:
+                    pass
+                button_down = False
+            try:
+                self.release_all_modifiers()
+            except Exception:
+                pass
+            raise
+        finally:
+            if button_down:
+                try:
+                    self.mouse_up(MouseButton.LEFT)
+                except Exception:
+                    pass
 
     def scroll(
         self,
@@ -259,20 +469,67 @@ class WindowsInputInjector:
         inp.u.mi.mouseData = delta & 0xFFFFFFFF
         user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
-    def key_down(self, key: str) -> None:
+    # -------------------------------------------------------------------------
+    # IInputInjector Protocol Implementation
+    # -------------------------------------------------------------------------
+
+    def mouse_move(self, x: int, y: int) -> bool:
+        """IInputInjector protocol: Move cursor to virtual screen coordinates (x, y)."""
+        self.move_cursor(x, y)
+        return True
+
+    def mouse_click(
+        self,
+        x: Optional[int] = None,
+        y: Optional[int] = None,
+        button: MouseButton = MouseButton.LEFT,
+        count: int = 1,
+    ) -> bool:
+        """IInputInjector protocol: Click mouse button at coordinates or current position."""
+        if x is not None and y is not None:
+            self.click_at(x, y, button=button, count=count)
+        else:
+            self.click(button=button, count=count)
+        return True
+
+    def mouse_drag(
+        self,
+        start_x: int,
+        start_y: int,
+        end_x: int,
+        end_y: int,
+        duration_ms: int = 200,
+    ) -> bool:
+        """IInputInjector protocol: Perform smooth drag-and-drop gesture."""
+        self.drag_and_drop(start_x, start_y, end_x, end_y, duration_s=duration_ms / 1000.0)
+        return True
+
+    def mouse_scroll(self, delta_y: int, delta_x: int = 0) -> bool:
+        """IInputInjector protocol: Synthesize vertical and optional horizontal scroll."""
+        if delta_y != 0:
+            direction = ScrollDirection.UP if delta_y > 0 else ScrollDirection.DOWN
+            self.scroll(direction=direction, amount=abs(delta_y))
+        if delta_x != 0:
+            direction = ScrollDirection.RIGHT if delta_x > 0 else ScrollDirection.LEFT
+            self.scroll(direction=direction, amount=abs(delta_x))
+        return True
+
+    def key_down(self, key: str) -> bool:
         self._ensure_desktop_attached()
         vk = self._resolve_vk(key)
         inp = INPUT(type=INPUT_KEYBOARD)
         inp.u.ki.wVk = vk
         user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        return True
 
-    def key_up(self, key: str) -> None:
+    def key_up(self, key: str) -> bool:
         self._ensure_desktop_attached()
         vk = self._resolve_vk(key)
         inp = INPUT(type=INPUT_KEYBOARD)
         inp.u.ki.wVk = vk
         inp.u.ki.dwFlags = KEYEVENTF_KEYUP
         user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        return True
 
     def send_key(self, key: str, modifiers: Optional[List[str]] = None) -> None:
         """Press key with modifiers, with strict guarantee of modifier release on exception."""

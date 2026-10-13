@@ -52,6 +52,7 @@ class OverlayMode(str, Enum):
 
     OFF = "off"
     NUMBERS = "numbers"
+    CONTINUOUS_NUMBERS = "continuous_numbers"
     NAMES = "names"
     GRID = "grid"
     DISAMBIGUATION = "disambiguation"
@@ -62,8 +63,11 @@ class ActionType(str, Enum):
 
     CLICK = "click"
     DOUBLE_CLICK = "double_click"
+    TRIPLE_CLICK = "triple_click"
     RIGHT_CLICK = "right_click"
     MIDDLE_CLICK = "middle_click"
+    LONG_PRESS = "long_press"
+    DRAG = "drag"
     FOCUS = "focus"
     SELECT = "select"
     EXPAND = "expand"
@@ -203,6 +207,9 @@ class LabeledElement:
     is_keyboard_focusable: bool = True
     is_password: bool = False
     is_offscreen: bool = False
+    is_focused: bool = False
+    depth: int = 0
+    z_index: int = 0
     supported_actions: list[ActionType] = field(default_factory=list)
     class_name: str = ""
     automation_id: str = ""

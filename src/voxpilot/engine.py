@@ -115,8 +115,30 @@ class VoxPilotEngine:
             self.overlay_service.update_hud(mode=self.mode, text=event.text)
             return
 
-        logger.info(f"Final transcript: '{event.text}'")
-        self.process_text_command(event.text)
+        text = event.text.strip()
+        if not text or text == "[unk]":
+            return
+
+        logger.info(f"Final transcript: '{text}' in mode {self.mode}")
+
+        if self.mode == EngineMode.DICTATION:
+            # Check if user spoke a mode-switching or wake/sleep command
+            intent = self.command_parser.parse(text)
+            if intent and intent.name in ("SWITCH_TO_COMMAND_MODE", "STOP_DICTATION", "GO_TO_SLEEP", "WAKE_UP"):
+                self.dispatch_intent(intent)
+                return
+
+            # Otherwise, type the dictated text with natural spacing
+            self.input_injector.type_text(text + " ")
+            self.overlay_service.update_hud(mode=self.mode, text=f"Typed: {text}")
+            return
+
+        # In COMMAND Mode:
+        res = self.process_text_command(text)
+        # If it was casual conversation (NO_MATCH), take zero action and do not pop up errors
+        if res.status == CommandStatus.NO_MATCH:
+            logger.debug(f"Filtered non-command utterance: '{text}'")
+            return
 
     def dispatch_intent(self, intent: Intent) -> CommandResult:
         name = intent.name
@@ -129,17 +151,33 @@ class VoxPilotEngine:
             )
 
         if name == "SHOW_NUMBERS":
-            return self._handle_show_numbers(intent)
+            return self._handle_show_numbers(intent, continuous=False)
+        elif name == "SHOW_NUMBERS_CONTINUOUS":
+            return self._handle_show_numbers(intent, continuous=True)
         elif name == "HIDE_NUMBERS":
             return self._handle_hide_numbers(intent)
         elif name == "CLICK_NUMBER":
             return self._handle_click_number(intent)
         elif name == "DOUBLE_CLICK_NUMBER":
             return self._handle_click_number(intent, count=2)
+        elif name == "TRIPLE_CLICK_NUMBER":
+            return self._handle_click_number(intent, count=3)
         elif name == "RIGHT_CLICK_NUMBER":
             return self._handle_click_number(intent, button=MouseButton.RIGHT)
+        elif name == "LONG_PRESS_NUMBER":
+            return self._handle_long_press_number(intent)
+        elif name == "DRAG_NUMBER":
+            return self._handle_drag_number(intent)
         elif name == "CLICK_NAME":
             return self._handle_click_name(intent)
+        elif name == "SWITCH_TO_COMMAND_MODE":
+            self.mode = EngineMode.COMMAND
+            self.overlay_service.update_hud(mode=self.mode, text="Command Mode Active")
+            return CommandResult.success(intent=intent, message="Switched to Command mode")
+        elif name == "SWITCH_TO_DICTATION_MODE":
+            self.mode = EngineMode.DICTATION
+            self.overlay_service.update_hud(mode=self.mode, text="Dictation Active")
+            return CommandResult.success(intent=intent, message="Switched to Dictation mode")
         elif name == "SHOW_GRID":
             self.overlay_service.show_grid()
             self.overlay_service.update_hud(mode=self.mode, text="Grid Visible")
@@ -280,13 +318,14 @@ class VoxPilotEngine:
         """Alias for dispatch_intent."""
         return self.dispatch_intent(intent)
 
-    def _handle_show_numbers(self, intent: Intent) -> CommandResult:
+    def _handle_show_numbers(self, intent: Intent, continuous: bool = False) -> CommandResult:
         elements = self.element_provider.discover_elements()
-        self.overlay_service.show_numbers(elements)
-        self.overlay_service.update_hud(mode=self.mode, text=f"Labeled {len(elements)} items")
+        self.overlay_service.show_numbers(elements, continuous=continuous)
+        mode_text = f"Labeled {len(elements)} items (Continuous)" if continuous else f"Labeled {len(elements)} items"
+        self.overlay_service.update_hud(mode=self.mode, text=mode_text)
 
         # Dynamic grammar loop: Push visible numbers (words + digits) & names to speech engine
-        grammar_phrases = ["show numbers", "hide numbers", "show grid", "hide grid"]
+        grammar_phrases = ["show numbers", "hide numbers", "show numbers continuously", "show grid", "hide grid"]
         max_num = max(25, len(elements))
         for num_i in range(1, max_num + 1):
             words = NumberParser.number_to_words(num_i)
@@ -367,7 +406,8 @@ class VoxPilotEngine:
 
         cx, cy = element.rect.center()
         self.input_injector.click_at(cx, cy, button=button, count=count)
-        self.overlay_service.hide_numbers()
+        if not self.overlay_service.is_continuous_numbers():
+            self.overlay_service.hide_numbers()
         self.overlay_service.update_hud(mode=self.mode, text=f"Clicked #{num} ({element.name})")
 
         return CommandResult.success(
@@ -375,6 +415,56 @@ class VoxPilotEngine:
             message=f"Clicked element #{num} at ({cx}, {cy})",
             clicked_element=element.name,
             coordinates=(cx, cy),
+        )
+
+    def _handle_long_press_number(self, intent: Intent) -> CommandResult:
+        num = intent.slots.get("number")
+        if num is None:
+            return CommandResult.no_match(raw_text=intent.raw_text, message="Missing number slot")
+        element = self.element_provider.get_element_by_id(int(num))
+        if not element:
+            return CommandResult(
+                status=CommandStatus.ELEMENT_GONE,
+                code="ERR_ELEMENT_NOT_FOUND",
+                message=f"No labeled element with number {num}",
+                matched_intent=intent,
+                details={"element_id": num},
+            )
+        cx, cy = element.rect.center()
+        self.input_injector.long_press_at(cx, cy, duration_s=1.0)
+        if not self.overlay_service.is_continuous_numbers():
+            self.overlay_service.hide_numbers()
+        self.overlay_service.update_hud(mode=self.mode, text=f"Long pressed #{num} ({element.name})")
+        return CommandResult.success(
+            intent=intent,
+            message=f"Long pressed #{num}",
+            coordinates=(cx, cy),
+        )
+
+    def _handle_drag_number(self, intent: Intent) -> CommandResult:
+        from_num = intent.slots.get("from_number")
+        to_num = intent.slots.get("to_number")
+        if from_num is None or to_num is None:
+            return CommandResult.no_match(raw_text=intent.raw_text, message="Missing drag endpoints")
+        el1 = self.element_provider.get_element_by_id(int(from_num))
+        el2 = self.element_provider.get_element_by_id(int(to_num))
+        if not el1 or not el2:
+            return CommandResult(
+                status=CommandStatus.ELEMENT_GONE,
+                code="ERR_ELEMENT_NOT_FOUND",
+                message=f"Could not find elements #{from_num} or #{to_num}",
+                matched_intent=intent,
+            )
+        x1, y1 = el1.rect.center()
+        x2, y2 = el2.rect.center()
+        self.input_injector.drag_and_drop(x1, y1, x2, y2, duration_s=0.3)
+        if not self.overlay_service.is_continuous_numbers():
+            self.overlay_service.hide_numbers()
+        self.overlay_service.update_hud(mode=self.mode, text=f"Dragged #{from_num} to #{to_num}")
+        return CommandResult.success(
+            intent=intent,
+            message=f"Dragged #{from_num} to #{to_num}",
+            coordinates=(x2, y2),
         )
 
     def _handle_click_name(self, intent: Intent) -> CommandResult:
@@ -413,7 +503,8 @@ class VoxPilotEngine:
 
         cx, cy = best_element.rect.center()
         self.input_injector.click_at(cx, cy)
-        self.overlay_service.hide_numbers()
+        if not self.overlay_service.is_continuous_numbers():
+            self.overlay_service.hide_numbers()
         self.overlay_service.update_hud(mode=self.mode, text=f"Clicked '{best_element.name}'")
 
         return CommandResult.success(

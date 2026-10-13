@@ -18,10 +18,20 @@ class CommandParser:
 
     def _init_builtins(self) -> None:
         self.builtins: List[Dict[str, Any]] = [
-            {"intent": "SHOW_NUMBERS", "patterns": [r"^(?:please\s+)?show\s+numbers(?:\s+everywhere)?$", r"^numbers\s+on$"]},
+            {"intent": "SHOW_NUMBERS", "patterns": [
+                r"^(?:please\s+)?(?:show|display)\s+numbers?(?:\s+everywhere)?$",
+                r"^(?:sure|shore|so)\s+numbers?$",
+                r"^numbers\s+on$",
+                r"^numbers$",
+            ]},
+            {"intent": "SHOW_NUMBERS_CONTINUOUS", "patterns": [
+                r"^(?:please\s+)?(?:show|display)\s+numbers?\s+(?:continuously|permanently)$",
+                r"^(?:keep|leave)\s+numbers\s+on$",
+                r"^numbers\s+continuously$",
+            ]},
             {"intent": "HIDE_NUMBERS", "patterns": [r"^(?:please\s+)?(?:hide|remove)\s+(?:the\s+)?numbers$", r"^numbers\s+off$"]},
-            {"intent": "SHOW_NAMES", "patterns": [r"^(?:please\s+)?show\s+names$", r"^names\s+on$"]},
-            {"intent": "HIDE_NAMES", "patterns": [r"^(?:please\s+)?hide\s+names$", r"^names\s+off$"]},
+            {"intent": "SHOW_NAMES", "patterns": [r"^(?:please\s+)?show\s+(?:item\s+)?names$", r"^names\s+on$"]},
+            {"intent": "HIDE_NAMES", "patterns": [r"^(?:please\s+)?hide\s+(?:item\s+)?names$", r"^names\s+off$"]},
             {"intent": "SHOW_GRID", "patterns": [r"^(?:show|show me)?\s*(?:the\s+)?(?:screen\s+)?grid$", r"^grid\s+on$"]},
             {"intent": "HIDE_GRID", "patterns": [r"^(?:please\s+)?hide\s+grid$", r"^grid\s+off$", r"^cancel\s+grid$"]},
             {"intent": "SHOW_COMMANDS", "patterns": [r"^show\s+commands$", r"^what\s+can\s+i\s+say$"]},
@@ -29,6 +39,8 @@ class CommandParser:
             {"intent": "GO_TO_SLEEP", "patterns": [r"^(?:put\s+voxpilot\s+to\s+sleep|go\s+to\s+sleep|stop\s+listening|sleep)$"]},
             {"intent": "MUTE", "patterns": [r"^mute(?:\s+microphone)?$"]},
             {"intent": "UNMUTE", "patterns": [r"^unmute(?:\s+microphone)?$"]},
+            {"intent": "SWITCH_TO_COMMAND_MODE", "patterns": [r"^(?:switch\s+to\s+)?command\s+mode$", r"^stop\s+dictation$"]},
+            {"intent": "SWITCH_TO_DICTATION_MODE", "patterns": [r"^(?:switch\s+to\s+)?dictation\s+mode$", r"^start\s+dictation$", r"^dictate$"]},
             {"intent": "START_DICTATION", "patterns": [r"^start\s+dictation$", r"^dictate$", r"^dictation\s+mode$"]},
             {"intent": "STOP_DICTATION", "patterns": [r"^stop\s+dictation$", r"^command\s+mode$"]},
             {"intent": "PRESS_ENTER", "patterns": [r"^press\s+enter$", r"^hit\s+enter$", r"^enter$"]},
@@ -66,10 +78,17 @@ class CommandParser:
     def parse(self, text: str, context: Optional[FocusState] = None) -> Optional[Intent]:
         cleaned = text.strip().lower()
         cleaned = re.sub(r"[.,?!]", "", cleaned)
+        # Filter speech recognition noise tokens or empty utterances
+        if cleaned in ("[unk]", "unk", "") or cleaned.startswith("[unk]"):
+            return None
+
         # Strip common speech fillers and polite prefixes/suffixes
         cleaned = re.sub(r"^(?:uh+|um+|please|can you|could you|would you)\s+", "", cleaned)
         cleaned = re.sub(r"^(?:hey\s+voxpilot|voxpilot)\s+", "", cleaned)
         cleaned = re.sub(r"\s+(?:please|for me|now)$", "", cleaned)
+        # Normalize acoustic confusion variants (e.g. "sure" -> "show")
+        cleaned = re.sub(r"^(?:sure|shore|so)\s+numbers?$", "show numbers", cleaned)
+        cleaned = re.sub(r"^(?:sure|shore|so)\s+number$", "show number", cleaned)
         cleaned = cleaned.strip()
         if not cleaned:
             return None
@@ -98,7 +117,40 @@ class CommandParser:
             if len(chord_tokens) >= 2:
                 return Intent(name="KEY_COMBINATION", confidence=0.95, slots={"keys": chord_tokens}, raw_text=text)
 
-        m_click_num = re.match(r"^(?:please\s+)?(?:click|press|hit)(?:\s+on)?(?:\s+number)?\s+(.+)$", cleaned)
+        # Check drag and drop e.g. "drag 4 to 12", "move 3 into 8"
+        m_drag = re.match(r"^(?:please\s+)?(?:drag|move)\s+(?:number\s+)?(.+?)\s+(?:to|into|onto)\s+(?:number\s+)?(.+)$", cleaned)
+        if m_drag:
+            from_str = m_drag.group(1).strip()
+            to_str = m_drag.group(2).strip()
+            num_from = self.normalize_number(from_str)
+            num_to = self.normalize_number(to_str)
+            if num_from is not None and num_to is not None:
+                return Intent(
+                    name="DRAG_NUMBER",
+                    confidence=0.99,
+                    slots={"from_number": num_from, "to_number": num_to},
+                    raw_text=text,
+                )
+
+        # Check triple click e.g. "triple click 14", "triple tap 5"
+        m_triple = re.match(r"^(?:please\s+)?triple\s+(?:click|tap)\s+(.+)$", cleaned)
+        if m_triple:
+            target_phrase = m_triple.group(1).strip()
+            num = self.normalize_number(target_phrase)
+            if num is not None:
+                return Intent(name="TRIPLE_CLICK_NUMBER", confidence=0.99, slots={"number": num}, raw_text=text)
+            return Intent(name="TRIPLE_CLICK_NAME", confidence=0.90, slots={"name": target_phrase}, raw_text=text)
+
+        # Check long press e.g. "long press 12", "press and hold 4", "click and hold 9"
+        m_long = re.match(r"^(?:please\s+)?(?:long\s+press|press\s+and\s+hold|click\s+and\s+hold)\s+(.+)$", cleaned)
+        if m_long:
+            target_phrase = m_long.group(1).strip()
+            num = self.normalize_number(target_phrase)
+            if num is not None:
+                return Intent(name="LONG_PRESS_NUMBER", confidence=0.99, slots={"number": num}, raw_text=text)
+            return Intent(name="LONG_PRESS_NAME", confidence=0.90, slots={"name": target_phrase}, raw_text=text)
+
+        m_click_num = re.match(r"^(?:please\s+)?(?:click|press|hit|choose|tap)(?:\s+on)?(?:\s+number)?\s+(.+)$", cleaned)
         if m_click_num:
             target_phrase = m_click_num.group(1).strip()
             num = self.normalize_number(target_phrase)
@@ -117,7 +169,7 @@ class CommandParser:
                     raw_text=text,
                 )
 
-        m_dbl = re.match(r"^(?:please\s+)?double\s+click\s+(.+)$", cleaned)
+        m_dbl = re.match(r"^(?:please\s+)?double\s+(?:click|tap)\s+(.+)$", cleaned)
         if m_dbl:
             target_phrase = m_dbl.group(1).strip()
             num = self.normalize_number(target_phrase)
@@ -125,7 +177,7 @@ class CommandParser:
                 return Intent(name="DOUBLE_CLICK_NUMBER", confidence=0.99, slots={"number": num}, raw_text=text)
             return Intent(name="DOUBLE_CLICK_NAME", confidence=0.90, slots={"name": target_phrase}, raw_text=text)
 
-        m_right = re.match(r"^(?:please\s+)?right\s+click\s+(.+)$", cleaned)
+        m_right = re.match(r"^(?:please\s+)?(?:right\s+click|control\s+click)\s+(.+)$", cleaned)
         if m_right:
             target_phrase = m_right.group(1).strip()
             num = self.normalize_number(target_phrase)
