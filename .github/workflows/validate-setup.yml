@@ -28,3 +28,4 @@ jobs:
           PYTHONPATH: src
           QT_QPA_PLATFORM: offscreen
         run: .venv\Scripts\python -m pytest -q tests --tb=short
+# revalidate after fail-fast setup change
