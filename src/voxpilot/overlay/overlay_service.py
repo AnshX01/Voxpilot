@@ -513,6 +513,31 @@ class OverlayService(IOverlayService):
     # Backward Compatibility Aliases for Engine & Tests
     # -------------------------------------------------------------------------
 
+    def set_refresh_callback(self, callback, interval_ms: int = 1200) -> None:
+        """Call `callback` on the Qt GUI thread every interval while the app event loop runs."""
+        if not self._canvas:
+            return
+        timer = getattr(self, "_refresh_timer", None)
+        if timer is None:
+            timer = QtCore.QTimer(self._canvas)
+            self._refresh_timer = timer
+        try:
+            timer.timeout.disconnect()
+        except Exception:
+            pass
+        timer.timeout.connect(callback)
+        timer.start(interval_ms)
+
+    def stop_refresh(self) -> None:
+        """Stop the periodic refresh timer (before teardown, so no callback runs mid-hide)."""
+        timer = getattr(self, "_refresh_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+                timer.timeout.disconnect()
+            except Exception:
+                pass
+
     def hide_numbers(self) -> None:
         self._is_continuous_numbers = False
         if self._current_mode in (OverlayMode.NUMBERS, OverlayMode.CONTINUOUS_NUMBERS):

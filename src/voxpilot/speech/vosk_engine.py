@@ -69,6 +69,9 @@ class VoskSpeechEngine:
         self._use_command_grammar = use_command_grammar
         self._grammar_phrases: Optional[List[str]] = list(BASE_COMMAND_VOCABULARY) if use_command_grammar else None
         self._sample_rate = 16000
+        # Open vocabulary by default: a closed command grammar turns every non-listed word into [unk],
+        # which made live speech unrecognisable. Commands are matched by the parser on open transcripts.
+        self._open_vocab = True
         self._words_recognized = 0
         self._chunks_processed = 0
 

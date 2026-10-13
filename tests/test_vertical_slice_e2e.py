@@ -101,7 +101,7 @@ def test_direct_say_e2e():
         res2 = engine.process_text_command("1")
         assert res2.is_success is True
         assert res2.matched_intent.slots["number"] == 1
-        assert engine.overlay_service.is_numbers_visible() is False
+        assert engine.overlay_service.is_numbers_visible() is True  # stays until "hide numbers"
 
         # Hide numbers
         res3 = engine.process_text_command("hide numbers")

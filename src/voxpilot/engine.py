@@ -75,6 +75,9 @@ class VoxPilotEngine:
         self.is_running = True
         self.speech_engine.start()
         self.overlay_service.update_hud(mode=self.mode, text="Ready")
+        setter = getattr(self.overlay_service, "set_refresh_callback", None)
+        if setter:
+            setter(self._refresh_numbers, 1200)
         if live_mic:
             self.start_live_capture(device_id=device_id)
 
@@ -98,6 +101,26 @@ class VoxPilotEngine:
             if chunk:
                 self.speech_engine.process_audio(chunk)
 
+    def _refresh_numbers(self) -> None:
+        """Keep on-screen numbers in step with the screen while they are shown (GUI-thread timer)."""
+        if getattr(self, "_refreshing", False) or not self.is_running:
+            return
+        self._refreshing = True
+        try:
+            ov = self.overlay_service
+            if not ov.is_numbers_visible() or self.mode == EngineMode.SLEEP:
+                self._numbers_sig = None
+                return
+            elements = self.element_provider.discover_elements()
+            sig = tuple((e.name, e.rect.x, e.rect.y, e.rect.width, e.rect.height) for e in elements)
+            if sig != getattr(self, "_numbers_sig", None):
+                self._numbers_sig = sig
+                ov.show_numbers(elements, continuous=ov.is_continuous_numbers())
+        except Exception:  # pragma: no cover
+            logger.exception("numbers refresh failed")
+        finally:
+            self._refreshing = False
+
     def stop_live_capture(self) -> None:
         if self._live_capture:
             self._live_capture.stop()
@@ -107,6 +130,9 @@ class VoxPilotEngine:
         self.is_running = False
         self.stop_live_capture()
         self.speech_engine.stop()
+        stopper = getattr(self.overlay_service, "stop_refresh", None)
+        if callable(stopper):
+            stopper()
         self.overlay_service.hide_all()
         self.input_injector.release_all_modifiers()
 
@@ -164,7 +190,7 @@ class VoxPilotEngine:
         setter = getattr(se, "set_open_vocabulary", None)
         if setter:
             try:
-                setter(value in (EngineMode.DICTATION, EngineMode.SPELLING, EngineMode.SWIFT))
+                setter(True)
             except Exception:  # pragma: no cover
                 logger.exception("could not switch recognizer vocabulary")
 
@@ -602,8 +628,6 @@ class VoxPilotEngine:
 
         cx, cy = element.rect.center()
         self.input_injector.click_at(cx, cy, button=button, count=count)
-        if not self.overlay_service.is_continuous_numbers():
-            self.overlay_service.hide_numbers()
         self.overlay_service.update_hud(mode=self.mode, text=f"Clicked #{num} ({element.name})")
 
         return CommandResult.success(
@@ -628,8 +652,6 @@ class VoxPilotEngine:
             )
         cx, cy = element.rect.center()
         self.input_injector.long_press_at(cx, cy, duration_s=1.0)
-        if not self.overlay_service.is_continuous_numbers():
-            self.overlay_service.hide_numbers()
         self.overlay_service.update_hud(mode=self.mode, text=f"Long pressed #{num} ({element.name})")
         return CommandResult.success(
             intent=intent,
@@ -654,8 +676,6 @@ class VoxPilotEngine:
         x1, y1 = el1.rect.center()
         x2, y2 = el2.rect.center()
         self.input_injector.drag_and_drop(x1, y1, x2, y2, duration_s=0.3)
-        if not self.overlay_service.is_continuous_numbers():
-            self.overlay_service.hide_numbers()
         self.overlay_service.update_hud(mode=self.mode, text=f"Dragged #{from_num} to #{to_num}")
         return CommandResult.success(
             intent=intent,
@@ -699,8 +719,6 @@ class VoxPilotEngine:
 
         cx, cy = best_element.rect.center()
         self.input_injector.click_at(cx, cy)
-        if not self.overlay_service.is_continuous_numbers():
-            self.overlay_service.hide_numbers()
         self.overlay_service.update_hud(mode=self.mode, text=f"Clicked '{best_element.name}'")
 
         return CommandResult.success(

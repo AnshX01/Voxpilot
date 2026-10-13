@@ -86,22 +86,33 @@ class LiveAudioCapture:
         target_sr = self.sample_rate
         block_size = int(native_sr * (self.chunk_duration_ms / 1000.0))
 
+        cutoff = 0.45 * target_sr / native_sr  # normalised (cycles/sample) low-pass edge ~7.2 kHz
+        taps_n = 63
+        n = np.arange(taps_n) - (taps_n - 1) / 2.0
+        lp_taps = (2 * cutoff * np.sinc(2 * cutoff * n) * np.hamming(taps_n)).astype(np.float32)
+        lp_taps /= lp_taps.sum()
+        state = {"hist": np.zeros(taps_n - 1, dtype=np.float32), "phase": 0.0}
+
         def callback(indata, frames, time_info, status):
             if indata.shape[1] > 1:
                 mono = indata.mean(axis=1)
             else:
                 mono = indata[:, 0]
 
-            # Resample to 16kHz mono if device native sample rate differs
+            # Resample to 16kHz mono with an anti-aliasing low-pass (plain interpolation aliased
+            # speech from 44.1/48 kHz devices and hurt recognition).
             if native_sr != target_sr:
-                orig_len = len(mono)
-                target_len = int(orig_len * (target_sr / float(native_sr)))
+                hist = state["hist"]
+                buf = np.concatenate([hist, mono.astype(np.float32)])
+                filtered = np.convolve(buf, lp_taps, mode="same")[len(hist):]
+                state["hist"] = buf[-(len(lp_taps) - 1):]
+                orig_len = len(filtered)
+                target_len = int(round(orig_len * (target_sr / float(native_sr))))
                 if orig_len > 1 and target_len > 0:
-                    mono = np.interp(
-                        np.linspace(0, orig_len, target_len, endpoint=False),
-                        np.arange(orig_len),
-                        mono,
-                    ).astype(np.float32)
+                    pos = state["phase"] + np.arange(target_len) * (native_sr / float(target_sr))
+                    pos = pos[pos < orig_len - 1]
+                    mono = np.interp(pos, np.arange(orig_len), filtered).astype(np.float32)
+                    state["phase"] = (pos[-1] + native_sr / float(target_sr) - orig_len) if len(pos) else 0.0
 
             pcm_int16 = (mono * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
             chunk = AudioChunk(

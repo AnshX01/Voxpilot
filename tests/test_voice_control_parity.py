@@ -108,13 +108,33 @@ def test_show_commands_context_lists_text_commands_first(engine):
     assert e.visible_commands[0][0] == "Basic navigation"
 
 
-def test_open_vocabulary_for_text_modes_closed_for_command(engine):
+def test_recognizer_is_open_vocabulary_in_every_mode(engine):
+    """Live bug: a closed command grammar turned ordinary speech into [unk]. Never constrain it."""
     e, _, _ = engine
     se = e.speech_engine
-    say(e, "command mode")
-    se.set_open_vocabulary.assert_called_with(False)
-    say(e, "dictation mode")
-    se.set_open_vocabulary.assert_called_with(True)
+    for phrase in ("command mode", "dictation mode"):
+        say(e, phrase)
+        se.set_open_vocabulary.assert_called_with(True)
+
+
+def test_vosk_engine_defaults_to_open_vocabulary(monkeypatch, tmp_path) -> None:
+    from voxpilot.speech import vosk_engine as V
+
+    calls = []
+    monkeypatch.setattr(V.vosk, "Model", lambda path: object())
+
+    class Rec:
+        def __init__(self, *args):
+            calls.append(args)
+
+        def SetWords(self, _):
+            pass
+
+    monkeypatch.setattr(V.vosk, "KaldiRecognizer", Rec)
+    eng = V.VoskSpeechEngine(model_path=str(tmp_path))
+    eng.start()
+    eng.set_grammar(["click ok"])
+    assert all(len(c) == 2 for c in calls), "recognizer must not receive a closed grammar"
 
 
 def test_tray_microphone_choice_restarts_capture(monkeypatch) -> None:
@@ -131,3 +151,26 @@ def test_tray_microphone_choice_restarts_capture(monkeypatch) -> None:
     eng.start_live_capture.assert_called_once_with(device_id=3)
     icon.refresh_microphones()
     assert [a.isChecked() for a in icon._mic_actions] == [False, True]
+
+
+def test_numbers_refresh_follows_the_screen(engine) -> None:
+    """Numbers must update when the screen changes, not stay a one-shot snapshot."""
+    e, _, _ = engine
+    e.is_running = True
+    from voxpilot.contracts.dto import LabeledElement, ScreenRect
+
+    def el(i, x):
+        return LabeledElement(element_id=i, name=f"B{i}", control_type="Button",
+                              rect=ScreenRect(x=x, y=10, width=40, height=20), window_handle=1)
+
+    e.overlay_service = type("O", (), {})()
+    shown = []
+    e.overlay_service.is_numbers_visible = lambda: True
+    e.overlay_service.is_continuous_numbers = lambda: False
+    e.overlay_service.show_numbers = lambda els, continuous=False: shown.append([x.rect.x for x in els])
+    e.element_provider.discover_elements = lambda *a, **k: [el(1, 5)]
+    e._refresh_numbers()
+    e._refresh_numbers()  # unchanged screen: no redraw
+    e.element_provider.discover_elements = lambda *a, **k: [el(1, 99)]
+    e._refresh_numbers()
+    assert shown == [[5], [99]]

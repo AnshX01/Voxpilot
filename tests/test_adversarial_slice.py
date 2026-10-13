@@ -70,11 +70,11 @@ def test_adversarial_rapid_fire_burst():
         assert res2.status == CommandStatus.SUCCESS
         assert engine.overlay_service.is_numbers_visible() is True
 
-        # Step 4: "1" -> success, clicks #1 and dismisses overlay
+        # Step 4: "1" -> success, clicks #1; numbers stay until "hide numbers" (user-reported bug fix)
         res3 = engine.process_text_command("1")
         assert res3.status == CommandStatus.SUCCESS
         assert res3.matched_intent.slots["number"] == 1
-        assert engine.overlay_service.is_numbers_visible() is False
+        assert engine.overlay_service.is_numbers_visible() is True
 
         # Step 5: "999" -> element_gone (element does not exist)
         res4 = engine.process_text_command("999")
