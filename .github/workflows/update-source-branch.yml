@@ -1,4 +1,4 @@
-# run 7
+# run 8
 name: update-source-branch
 on:
   push:
@@ -20,258 +20,224 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Apply fix5 (inline patch)
+      - name: Apply fix8 (inline patch)
         shell: bash
         run: |
-          cat > vehicle/fix5.patch <<'PATCH_EOF'
+          cat > vehicle/fix8.patch <<'PATCH_EOF'
           diff --git a/src/voxpilot/app/tray.py b/src/voxpilot/app/tray.py
-          index ef09265..226f484 100644
+          index 226f484..4e31b48 100644
           --- a/src/voxpilot/app/tray.py
           +++ b/src/voxpilot/app/tray.py
-          @@ -72,6 +72,48 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-                   ("Swift Mode", EngineMode.SWIFT),
-               )
+          @@ -75,7 +75,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+               _MENU_QSS = """
+               QMenu { background: rgba(244,240,236,245); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
+                       padding: 8px 6px; icon-size: 26px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
+          -    QMenu::item { padding: 6px 22px 6px 10px; border-radius: 6px; margin: 1px 4px; }
+          +    QMenu::item { padding: 6px 26px 6px 10px; border-radius: 6px; margin: 1px 4px; }
+               QMenu::item:selected { background: rgba(10,132,255,255); color: white; }
+               QMenu::item:disabled { color: #8e8a86; }
+               QMenu::separator { height: 1px; background: rgba(0,0,0,30); margin: 6px 14px; }
+          @@ -86,8 +86,8 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+               def _add_header(menu, text: str, title: bool = False):
+                   label = QtWidgets.QLabel(text)
+                   label.setStyleSheet(
+          -            "padding: 4px 14px 2px 14px; background: transparent; "
+          -            + ("font-weight: 700; color: #1d1d1f;" if title else "font-weight: 600; color: #6e6a66;")
+          +            "padding: 6px 14px 3px 14px; background: transparent; font-size: 10.5pt; "
+          +            + ("font-weight: 700; font-size: 11pt; color: #1d1d1f;" if title else "font-weight: 600; color: #8a8681;")
+                   )
+                   wa = QtWidgets.QWidgetAction(menu)
+                   wa.setDefaultWidget(label)
+          @@ -138,10 +138,24 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
+                           ex, ey = 22 + dx * 12, 22 + dy * 12
+                           p.drawLine(ex, ey, ex - dx * 4 + dy * 4, ey - dy * 4 + dx * 4)
+                           p.drawLine(ex, ey, ex - dx * 4 - dy * 4, ey - dy * 4 - dx * 4)
+          +        elif kind == "s":
+          +            # simplified Swift bird silhouette
+          +            path = QtGui.QPainterPath()
+          +            path.moveTo(10, 14)
+          +            path.cubicTo(18, 24, 26, 28, 33, 30)
+          +            path.cubicTo(27, 31, 20, 29, 15, 26)
+          +            path.cubicTo(20, 31, 27, 34, 36, 33)
+          +            path.cubicTo(38, 31, 38, 26, 34, 21)
+          +            path.cubicTo(36, 17, 36, 13, 34, 10)
+          +            path.cubicTo(30, 17, 24, 19, 18, 17)
+          +            path.cubicTo(15, 16, 12, 15, 10, 14)
+          +            p.setPen(QtCore.Qt.NoPen)
+          +            p.setBrush(fg)
+          +            p.drawPath(path)
+                   else:
+          -            f = QtGui.QFont("Segoe UI", 17, QtGui.QFont.Bold)
+          +            f = QtGui.QFont("Segoe UI", 17, QtGui.QFont.Normal)
+                       p.setFont(f)
+          -            p.drawText(QtCore.QRect(0, 0, 44, 44), QtCore.Qt.AlignCenter, "A" if kind == "a" else "S")
+          +            p.drawText(QtCore.QRect(0, 0, 44, 44), QtCore.Qt.AlignCenter, "A")
+                   p.end()
+                   return QtGui.QIcon(px)
 
-          +    _MENU_QSS = """
-          +    QMenu { background: rgba(244,240,236,245); border: 1px solid rgba(0,0,0,40); border-radius: 12px;
-          +            padding: 8px 6px; icon-size: 26px; font-family: 'Segoe UI'; font-size: 10.5pt; color: #1d1d1f; }
-          +    QMenu::item { padding: 6px 22px 6px 10px; border-radius: 6px; margin: 1px 4px; }
-          +    QMenu::item:selected { background: rgba(10,132,255,255); color: white; }
-          +    QMenu::item:disabled { color: #8e8a86; }
-          +    QMenu::separator { height: 1px; background: rgba(0,0,0,30); margin: 6px 14px; }
-          +    QMenu::indicator { width: 18px; height: 18px; }
-          +    """
-          +
-          +    @staticmethod
-          +    def _add_header(menu, text: str, title: bool = False):
-          +        label = QtWidgets.QLabel(text)
-          +        label.setStyleSheet(
-          +            "padding: 4px 14px 2px 14px; background: transparent; "
-          +            + ("font-weight: 700; color: #1d1d1f;" if title else "font-weight: 600; color: #6e6a66;")
-          +        )
-          +        wa = QtWidgets.QWidgetAction(menu)
-          +        wa.setDefaultWidget(label)
-          +        menu.addAction(wa)
-          +        return wa
-          +
-          +    @staticmethod
-          +    def _speaker_icon(active: bool) -> QtGui.QIcon:
-          +        px = QtGui.QPixmap(44, 44)
-          +        px.fill(QtCore.Qt.transparent)
-          +        p = QtGui.QPainter(px)
-          +        p.setRenderHint(QtGui.QPainter.Antialiasing)
-          +        p.setPen(QtCore.Qt.NoPen)
-          +        p.setBrush(QtGui.QColor(10, 132, 255) if active else QtGui.QColor(215, 210, 205))
-          +        p.drawEllipse(2, 2, 40, 40)
-          +        fg = QtGui.QColor(255, 255, 255) if active else QtGui.QColor(70, 66, 62)
-          +        p.setBrush(fg)
-          +        poly = QtGui.QPolygonF([QtCore.QPointF(11, 18), QtCore.QPointF(17, 18), QtCore.QPointF(24, 12),
-          +                                QtCore.QPointF(24, 32), QtCore.QPointF(17, 26), QtCore.QPointF(11, 26)])
-          +        p.drawPolygon(poly)
-          +        p.setBrush(QtCore.Qt.NoBrush)
-          +        p.setPen(QtGui.QPen(fg, 2.5, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
-          +        p.drawArc(22, 14, 10, 16, -60 * 16, 120 * 16)
-          +        p.end()
-          +        return QtGui.QIcon(px)
-          +
-               @staticmethod
-               def _mode_icon(kind: str, active: bool) -> QtGui.QIcon:
-                   """Round icon like the guide's menu: blue circle when active, grey otherwise."""
-          @@ -106,15 +148,21 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-               _MODE_ICON_KIND = {EngineMode.DICTATION: "mic", EngineMode.COMMAND: "move",
-                                  EngineMode.SPELLING: "a", EngineMode.SWIFT: "s"}
+          @@ -375,7 +389,14 @@ def main() -> int:
+                       3000,
+                   )
 
-          +    def _refresh_mic_icons(self) -> None:
-          +        for act in [self.mic_action] + list(getattr(self, "_mic_actions", [])):
-          +            act.setIcon(self._speaker_icon(act.isChecked()))
-          +
-               def _refresh_mode_icons(self) -> None:
-          +        if hasattr(self, "mic_action"):
-          +            self._refresh_mic_icons()
-                   for mode, act in self.mode_actions.items():
-                       act.setIcon(self._mode_icon(self._MODE_ICON_KIND[mode], act.isChecked()))
+          -    return app.exec()
+          +    overlay = getattr(engine, "overlay_service", None)
+          +    if overlay is not None:
+          +        overlay.gui_loop_running = True
+          +    try:
+          +        return app.exec()
+          +    finally:
+          +        if overlay is not None:
+          +            overlay.gui_loop_running = False
 
-               def _create_menu(self) -> None:
-                   menu = QtWidgets.QMenu()
-                   self._menu = menu  # keep the Python wrapper alive; setContextMenu doesn't take ownership
-          -        title = menu.addAction("Voice Control")
-          -        title.setEnabled(False)
-          +        menu.setStyleSheet(self._MENU_QSS)
-          +        self._add_header(menu, "Voice Control", title=True)
-                   menu.addSeparator()
-                   self.stop_action = menu.addAction("Stop Listening")
-                   self.stop_action.triggered.connect(self._stop_listening)
-          @@ -122,7 +170,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-                   self.start_action.triggered.connect(self._start_listening)
-                   self.start_action.setEnabled(False)
-                   menu.addSeparator()
-          -        menu.addSection("Mode")
-          +        self._add_header(menu, "Mode")
-                   self.mode_group = QtGui.QActionGroup(menu)
-                   self.mode_actions = {}
-                   for label, mode in self.MODES:
-          @@ -135,12 +183,12 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-                   self.mode_group.triggered.connect(lambda _a: self._refresh_mode_icons())
-                   self._refresh_mode_icons()
-                   menu.addSeparator()
-          -        menu.addSection("Language")
-          +        self._add_header(menu, "Language")
-                   lang = menu.addAction("English")
-                   lang.setCheckable(True)
-                   lang.setChecked(True)
-                   menu.addSeparator()
-          -        menu.addSection("Microphone")
-          +        self._add_header(menu, "Microphone")
-                   self.mic_group = QtGui.QActionGroup(menu)
-                   self.mic_group.setExclusive(True)
-                   self.mic_action = menu.addAction("Automatic (default microphone)")
-          @@ -148,6 +196,8 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-                   self.mic_action.setChecked(True)
-                   self.mic_action.triggered.connect(lambda _=False: self._select_microphone(None))
-                   self.mic_group.addAction(self.mic_action)
-          +        self.mic_group.triggered.connect(lambda _a: self._refresh_mic_icons())
-          +        self._refresh_mic_icons()
-                   self._mic_actions = []
-                   self._selected_mic = None
-                   menu.aboutToShow.connect(self.refresh_microphones)
-          @@ -201,6 +251,7 @@ class VoxPilotTrayIcon(QtWidgets.QSystemTrayIcon):
-                       menu.insertAction(self._mic_anchor, act)
-                       self._mic_actions.append(act)
-                   self.mic_action.setChecked(self._selected_mic is None)
-          +        self._refresh_mic_icons()
 
-               def _select_microphone(self, device_id) -> None:
-                   self._selected_mic = device_id
+           if __name__ == "__main__":
           diff --git a/src/voxpilot/engine.py b/src/voxpilot/engine.py
-          index 3c33a18..3cd7bdf 100644
+          index 3cd7bdf..150871c 100644
           --- a/src/voxpilot/engine.py
           +++ b/src/voxpilot/engine.py
-          @@ -153,6 +153,11 @@ class VoxPilotEngine:
-                   self.stop_live_capture()
-                   q = getattr(self, "_dispatch_q", None)
-                   if q is not None:
-          +            try:
-          +                while True:
-          +                    q.get_nowait()  # drop utterances still pending at shutdown
-          +            except Exception:
-          +                pass
-                       q.put(None)
-                       self._dispatch_q = None
-                   self.speech_engine.stop()
+          @@ -109,10 +109,20 @@ class VoxPilotEngine:
+                           ev = self._dispatch_q.get()
+                           if ev is None:
+                               return
+          +                if not self.is_running:
+          +                    continue  # stopped while this utterance was queued
+                           try:
+                               self._handle_final_event(ev)
+                           except Exception:  # pragma: no cover
+                               logger.exception("transcript handling failed")
+          +                if not self.is_running:
+          +                    # stop() arrived while this command was in flight: undo its lingering
+          +                    # on-screen / key-state effects (an already injected click or key cannot be recalled)
+          +                    try:
+          +                        self.overlay_service.hide_all()
+          +                        self.input_injector.release_all_modifiers()
+          +                    except Exception:  # pragma: no cover
+          +                        logger.exception("post-stop cleanup failed")
+
+                   self._dispatch_thread = threading.Thread(target=work, daemon=True, name="voxpilot-dispatch")
+                   self._dispatch_thread.start()
           diff --git a/src/voxpilot/overlay/overlay_service.py b/src/voxpilot/overlay/overlay_service.py
-          index d368ec3..b8c2a4e 100644
+          index b8c2a4e..b58d197 100644
           --- a/src/voxpilot/overlay/overlay_service.py
           +++ b/src/voxpilot/overlay/overlay_service.py
-          @@ -579,3 +579,77 @@ class OverlayService(IOverlayService):
-                       self._canvas.update()
-                       if self._app:
-                           self._app.processEvents()
-          +
-          +
-          +# -----------------------------------------------------------------------------
-          +# GUI-thread marshalling: Qt widgets may only be touched from the thread that owns
-          +# them. Speech/command handling runs on worker threads, so every mutating overlay
-          +# call made from another thread is queued to the GUI thread and waited for.
-          +# -----------------------------------------------------------------------------
-          +class _GuiInvoker(QtCore.QObject):
-          +    call = QtCore.Signal(object)
-          +
-          +    def __init__(self) -> None:
-          +        super().__init__()
-          +        self.call.connect(self._run, QtCore.Qt.QueuedConnection)
-          +
-          +    @QtCore.Slot(object)
-          +    def _run(self, job) -> None:
-          +        job()
-          +
-          +
-          +def _marshal(fn):
-          +    import functools
-          +
-          +    @functools.wraps(fn)
-          +    def wrapper(self, *args, **kwargs):
-          +        invoker = getattr(self, "_invoker", None)
-          +        if invoker is None or threading.get_ident() == self._gui_ident:
-          +            return fn(self, *args, **kwargs)
-          +        state = {"claimed": False, "done": threading.Event(), "result": None, "error": None}
-          +        lock = threading.Lock()
-          +
-          +        def job():
-          +            with lock:
-          +                if state["claimed"]:
-          +                    return
-          +                state["claimed"] = True
-          +            try:
-          +                state["result"] = fn(self, *args, **kwargs)
-          +            except BaseException as exc:  # pragma: no cover
-          +                state["error"] = exc
-          +            finally:
-          +                state["done"].set()
-          +
-          +        invoker.call.emit(job)
-          +        if not state["done"].wait(1.0):
-          +            with lock:
-          +                if not state["claimed"]:
-          +                    # no GUI event loop is running (headless/tests): run inline as before
-          +                    state["claimed"] = True
-          +                    return fn(self, *args, **kwargs)
-          +            state["done"].wait(5.0)
-          +        if state["error"] is not None:
-          +            raise state["error"]
-          +        return state["result"]
-          +
-          +    return wrapper
-          +
-          +
-          +_orig_init_qt = OverlayService._init_qt
-          +
-          +
-          +def _init_qt_with_invoker(self) -> None:
-          +    _orig_init_qt(self)
-          +    self._gui_ident = threading.get_ident()
-          +    self._invoker = _GuiInvoker()
-          +
-          +
-          +OverlayService._init_qt = _init_qt_with_invoker
-          +for _name in (
-          +    "show_numbers", "show_names", "hide_names", "show_grid", "show_text_numbers",
-          +    "hide_text_numbers", "show_disambiguation", "show_hud", "hide", "hide_numbers",
-          +    "hide_grid", "hide_all", "update_hud", "drill_down_grid", "undo_grid",
-          +):
-          +    if hasattr(OverlayService, _name):
-          +        setattr(OverlayService, _name, _marshal(getattr(OverlayService, _name)))
+          @@ -599,19 +599,26 @@ class _GuiInvoker(QtCore.QObject):
+
+
+           def _marshal(fn):
+          +    """Run `fn` on the GUI thread. Off-thread callers are queued to it only while the app's
+          +    event loop is running (`gui_loop_running`). A queued job that has not started after the
+          +    timeout is cancelled (never run later, never run on the calling thread); the call then
+          +    returns None and logs. With no event loop (headless/tests) calls run in the caller's thread
+          +    exactly as before, since there is no GUI thread to hand off to."""
+               import functools
+
+               @functools.wraps(fn)
+               def wrapper(self, *args, **kwargs):
+                   invoker = getattr(self, "_invoker", None)
+          -        if invoker is None or threading.get_ident() == self._gui_ident:
+          +        if (invoker is None or threading.get_ident() == self._gui_ident
+          +                or not getattr(self, "gui_loop_running", False)):
+                       return fn(self, *args, **kwargs)
+          -        state = {"claimed": False, "done": threading.Event(), "result": None, "error": None}
+          +        state = {"claimed": False, "cancelled": False, "done": threading.Event(),
+          +                 "result": None, "error": None}
+                   lock = threading.Lock()
+
+                   def job():
+                       with lock:
+          -                if state["claimed"]:
+          +                if state["claimed"] or state["cancelled"]:
+                               return
+                           state["claimed"] = True
+                       try:
+          @@ -622,13 +629,13 @@ def _marshal(fn):
+                           state["done"].set()
+
+                   invoker.call.emit(job)
+          -        if not state["done"].wait(1.0):
+          +        if not state["done"].wait(3.0):
+                       with lock:
+                           if not state["claimed"]:
+          -                    # no GUI event loop is running (headless/tests): run inline as before
+          -                    state["claimed"] = True
+          -                    return fn(self, *args, **kwargs)
+          -            state["done"].wait(5.0)
+          +                    state["cancelled"] = True
+          +                    logger.error("GUI thread did not service overlay call %s; dropped", fn.__name__)
+          +                    return None
+          +            state["done"].wait(10.0)  # already running on the GUI thread; wait for it
+                   if state["error"] is not None:
+                       raise state["error"]
+                   return state["result"]
           diff --git a/tests/test_voice_control_parity.py b/tests/test_voice_control_parity.py
-          index 4c64eb6..3f9ced4 100644
+          index 3f9ced4..7bbc96a 100644
           --- a/tests/test_voice_control_parity.py
           +++ b/tests/test_voice_control_parity.py
-          @@ -201,3 +201,25 @@ def test_final_transcripts_are_handled_off_the_audio_thread(engine) -> None:
-                   time.sleep(0.05)
-               assert seen and seen[0][1] == "voxpilot-dispatch"
-               e.stop()
+          @@ -209,6 +209,7 @@ def test_overlay_calls_from_worker_thread_run_on_gui_thread() -> None:
+               from PySide6 import QtCore, QtWidgets
+               from voxpilot.overlay.overlay_service import OverlayService
+               ov = OverlayService()
+          +    ov.gui_loop_running = True
+               gui = threading.get_ident()
+               ran = []
+               orig = ov._canvas.hide
+          @@ -223,3 +224,54 @@ def test_overlay_calls_from_worker_thread_run_on_gui_thread() -> None:
+                   time.sleep(0.01)
+               t.join()
+               assert ran == [gui]
           +
           +
-          +def test_overlay_calls_from_worker_thread_run_on_gui_thread() -> None:
-          +    """Overlay mutations made off the GUI thread are queued to it (Qt widgets are not thread-safe)."""
+          +def test_stalled_gui_thread_never_runs_call_inline_or_late() -> None:
+          +    """Loop flagged running but not serviced: the call is dropped, not run on the worker thread,
+          +    and does not run later when the GUI thread finally processes events."""
           +    import threading
-          +    from PySide6 import QtCore, QtWidgets
-          +    from voxpilot.overlay.overlay_service import OverlayService
-          +    ov = OverlayService()
-          +    gui = threading.get_ident()
+          +    from PySide6 import QtWidgets
+          +    from voxpilot.overlay import overlay_service as osv
+          +    ov = osv.OverlayService()
+          +    ov.gui_loop_running = True
           +    ran = []
           +    orig = ov._canvas.hide
           +    ov._canvas.hide = lambda: (ran.append(threading.get_ident()), orig())[1]
           +    t = threading.Thread(target=ov.hide_all)
           +    t.start()
-          +    app = QtWidgets.QApplication.instance()
-          +    import time
-          +    t0 = time.time()
-          +    while t.is_alive() and time.time() - t0 < 3:
-          +        app.processEvents()
-          +        time.sleep(0.01)
-          +    t.join()
-          +    assert ran == [gui]
+          +    t.join(8)  # GUI thread (this one) never services the queue during the wait
+          +    assert not t.is_alive()
+          +    assert ran == []                      # not executed inline on the worker
+          +    QtWidgets.QApplication.instance().processEvents()
+          +    assert ran == []                      # and not executed late (cancelled)
+          +
+          +
+          +def test_stop_drops_queued_and_cleans_after_inflight(engine) -> None:
+          +    import threading, time
+          +    from voxpilot.contracts.dto import TranscriptEvent
+          +    e, _, _ = engine
+          +    e.is_running = True
+          +    started, release, handled = threading.Event(), threading.Event(), []
+          +    cleaned = []
+          +
+          +    def handler(ev):
+          +        started.set()
+          +        release.wait(3)
+          +        handled.append(ev.text)
+          +
+          +    e._handle_final_event = handler
+          +    e.overlay_service = type("O", (), {"hide_all": lambda s: cleaned.append("hide"),
+          +                                       "stop_refresh": lambda s: None})()
+          +    e.input_injector.release_all_modifiers = lambda: cleaned.append("mods")
+          +    e._start_dispatch_worker()
+          +    e._on_transcript(TranscriptEvent(text="one", is_final=True))
+          +    started.wait(2)
+          +    e._on_transcript(TranscriptEvent(text="two", is_final=True))  # queued behind the in-flight one
+          +    e.stop()
+          +    release.set()
+          +    for _ in range(60):
+          +        if "hide" in cleaned[2:] or cleaned.count("hide") >= 2:
+          +            break
+          +        time.sleep(0.05)
+          +    assert handled == ["one"]             # queued utterance never ran after stop
+          +    assert cleaned.count("hide") >= 2     # stop() cleanup plus post-in-flight cleanup
           PATCH_EOF
-          git apply --whitespace=nowarn vehicle/fix5.patch
+          git apply --whitespace=nowarn vehicle/fix8.patch
       - name: Setup and test
         shell: cmd
         run: setup_windows.bat
@@ -287,5 +253,5 @@ jobs:
           git config user.name "voxpilot-parity-bot"
           git config user.email "noreply@users.noreply.github.com"
           git add -A -- . ':!vehicle' ':!.venv' ':!models'
-          git commit -m "GUI-thread overlay marshalling; Apple-style tray menu"
+          git commit -m "Safe GUI marshalling, post-stop cleanup, menu polish"
           git push origin voxpilot-voice-control-parity
